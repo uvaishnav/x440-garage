@@ -13,6 +13,11 @@
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
   }
 
+  html {
+    scroll-padding-top: calc(env(safe-area-inset-top, 0px) + 1.5rem);
+    scroll-padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 5rem);
+  }
+
   input,
   textarea,
   select {
@@ -31,11 +36,28 @@
 }
 
 .safe-top {
-  padding-top: max(env(safe-area-inset-top), 14px);
+  padding-top: calc(env(safe-area-inset-top, 0px) + 1.25rem);
 }
 
 .safe-bottom {
-  padding-bottom: max(env(safe-area-inset-bottom), 14px);
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 14px);
+}
+
+.safe-bottom-sheet {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1.5rem);
+}
+
+.status-bar-scrim {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: env(safe-area-inset-top, 0px);
+  background: rgba(10, 10, 11, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  z-index: 30;
+  pointer-events: none;
 }
 
 @keyframes sheet-up {

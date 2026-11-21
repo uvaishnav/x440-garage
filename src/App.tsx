@@ -57,7 +57,10 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#0A0A0B] text-[#F5F5F7]">
-      <main className="max-w-lg mx-auto px-4 pt-4 pb-28 safe-top">
+      {/* iOS status bar / Dynamic Island backdrop blur overlay on scroll */}
+      <div className="status-bar-scrim" />
+
+      <main className="max-w-lg mx-auto px-4 pb-28 safe-top">
         {activeTab === 'home' && (
           <HomePage
             currentOdometer={garage.currentOdometer}

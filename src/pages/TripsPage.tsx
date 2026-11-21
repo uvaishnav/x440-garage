@@ -374,7 +374,7 @@ export const TripsPage: React.FC<TripsPageProps> = ({
       {/* Start New Trip Modal */}
       {showNewTrip && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm">
-          <div className="w-full max-w-lg bg-[#141518] border-t border-white/10 rounded-t-[28px] p-5 space-y-4 animate-sheet-up safe-bottom">
+          <div className="w-full max-w-lg bg-[#141518] border-t border-white/10 rounded-t-[28px] p-5 space-y-4 animate-sheet-up safe-bottom-sheet">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold text-[#F5F5F7]">Start Highway Trip</h3>
               <button
@@ -433,7 +433,7 @@ export const TripsPage: React.FC<TripsPageProps> = ({
       {/* Finish Trip Modal */}
       {endingTrip && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm">
-          <div className="w-full max-w-lg bg-[#141518] border-t border-white/10 rounded-t-[28px] p-5 space-y-4 animate-sheet-up safe-bottom">
+          <div className="w-full max-w-lg bg-[#141518] border-t border-white/10 rounded-t-[28px] p-5 space-y-4 animate-sheet-up safe-bottom-sheet">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold text-[#F5F5F7]">
                 Finish {endingTrip.name}

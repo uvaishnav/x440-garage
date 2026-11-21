@@ -24,7 +24,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onContinueLocal }) => {
   };
 
   return (
-    <div className="min-h-screen bg-[#0A0A0B] text-[#F5F5F7] flex flex-col justify-between px-7 py-12 safe-top safe-bottom">
+    <div className="min-h-screen bg-[#0A0A0B] text-[#F5F5F7] flex flex-col justify-between px-7 pt-[calc(env(safe-area-inset-top,0px)+2.5rem)] pb-[calc(env(safe-area-inset-bottom,0px)+2rem)]">
       <div />
 
       <div className="flex flex-col items-center text-center">

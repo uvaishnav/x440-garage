@@ -560,7 +560,7 @@ export const CarePage: React.FC<CarePageProps> = ({
       {/* MARK MAINTENANCE DONE + KEY-VALUE BILL EDITOR SHEET */}
       {activeTask && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm">
-          <div className="w-full max-w-lg bg-[#141518] border-t border-white/10 rounded-t-[28px] max-h-[90vh] overflow-y-auto p-5 space-y-4 animate-sheet-up safe-bottom">
+          <div className="w-full max-w-lg bg-[#141518] border-t border-white/10 rounded-t-[28px] max-h-[90dvh] overflow-y-auto p-5 space-y-4 animate-sheet-up safe-bottom-sheet">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-[10px] uppercase tracking-wider text-[#FF6600] font-semibold">
@@ -630,7 +630,7 @@ export const CarePage: React.FC<CarePageProps> = ({
       {/* LOG ISSUE SHEET */}
       {showIssueForm && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm">
-          <div className="w-full max-w-lg bg-[#141518] border-t border-white/10 rounded-t-[28px] p-5 space-y-4 animate-sheet-up safe-bottom">
+          <div className="w-full max-w-lg bg-[#141518] border-t border-white/10 rounded-t-[28px] p-5 space-y-4 animate-sheet-up safe-bottom-sheet">
             <div className="flex items-center justify-between">
               <h3 className="text-lg font-semibold text-[#F5F5F7]">
                 Log Bike Symptom

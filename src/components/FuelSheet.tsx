@@ -147,7 +147,7 @@ export const FuelSheet: React.FC<FuelSheetProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm">
-      <div className="w-full max-w-lg bg-[#141518] border-t border-white/10 rounded-t-[28px] max-h-[92vh] overflow-y-auto animate-sheet-up safe-bottom">
+      <div className="w-full max-w-lg bg-[#141518] border-t border-white/10 rounded-t-[28px] max-h-[90dvh] overflow-y-auto animate-sheet-up safe-bottom-sheet">
         {/* Grabber & Header */}
         <div className="sticky top-0 z-10 bg-[#141518]/95 backdrop-blur-md px-5 pt-3 pb-3 border-b border-white/[0.06]">
           <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-3" />
