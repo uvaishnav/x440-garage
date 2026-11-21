@@ -419,11 +419,19 @@ export function useGarageData(user: User | null) {
     task: MaintenanceTask,
     log: MaintenanceLog
   ) => {
+    const latest = [...maintenanceLogs, log]
+      .filter((item) => item.taskId === task.id)
+      .sort(
+        (a, b) =>
+          b.odometer - a.odometer ||
+          b.date.localeCompare(a.date) ||
+          b.createdAt - a.createdAt
+      )[0];
     const updatedTask: MaintenanceTask = {
       ...task,
-      lastDoneOdometer: log.odometer,
-      lastDoneDate: log.date,
-      dueNowReason: undefined,
+      lastDoneOdometer: latest.odometer,
+      lastDoneDate: latest.date,
+      dueNowReason: latest.id === log.id ? undefined : task.dueNowReason,
     };
 
     if (isCloud && db && user) {
@@ -549,6 +557,9 @@ export function useGarageData(user: User | null) {
       billEntries: [],
       notes: `Completed during ${event.title}`,
       eventId: event.id,
+      careTemplateId: event.careTaskId === task.id ? event.careTemplateId : undefined,
+      observations: event.careTaskId === task.id ? event.observations : [],
+      insightFlags: event.careTaskId === task.id ? event.insightFlags : [],
       createdAt: event.createdAt + index,
     }));
     const taskUpdates = completedTasks.map((task) => {

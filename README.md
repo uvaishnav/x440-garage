@@ -6,11 +6,12 @@ A private, single-rider iPhone PWA for a Harley-Davidson X440 Matte Denim Black.
 
 - **Fast fuel logging:** odometer plus litres, or total paid plus rate; Full Tank defaults on; nearby OSM petrol bunks, recent bunks, fuel grade, ride mix, notes and backdated entries.
 - **Correct tank-to-tank mileage:** partial fills are carried forward until the next full fill, and backdated entries recalculate automatically in odometer order.
-- **Fuel intelligence:** city/highway/mixed and fuel-grade averages, running cost per kilometre, fill history, bunk rankings after at least two clean full-tank intervals, and maintenance/event context alongside each measured mileage interval.
+- **Fuel intelligence:** city/highway/mixed and fuel-grade averages, running cost per kilometre, fill history, bunk rankings after at least two clean full-tank intervals, and green/red care signals alongside each measured mileage interval.
 - **Trips:** before-ride checklist, start/end odometer and time, start/end tank state, linked fuel logs, exact full-to-full or clearly labelled tank-level mileage estimates, cost per kilometre and notes.
 - **Route enrichment:** Google Maps Timeline JSON and GPX import, automatic motorcycle filtering, optional Google `DRIVING` fallback, X440 trip matching, route map, speed zones, moving/stopped time, and city/highway road classification using OSM data.
-- **X440 Care:** 17 editable kilometre-or-time maintenance reminders, rain-triggered chain care, bike diagnostic map, completion history, custom tasks and task disabling.
-- **Bike event history:** an immediate Care-screen logger for service, oil, chain, tyre, brake, repair and modification templates, plus one-time custom events that do not alter the template list. An event can mark selected care tasks complete and store workshop, notes and structured bill details.
+- **X440 Care:** 17 editable kilometre-or-time reminders with task-specific inspection records: before/after tyre pressure, chain slack, clutch/throttle free play, spark-plug gap, fluid/condition checks and replacement outcomes. Each task has relevant bill presets plus custom rows.
+- **Bike event history:** an immediate Care-screen logger for service, oil, chain, tyre, brake, repair and modification templates, plus one-time custom events that do not alter the template list. Periodic service deliberately skips measurements and treats selected work as restored.
+- **Service handover:** shows only initialized items actually due, open issues and the latest measurements that remain out of range; a newer corrected record or completed service clears the finding.
 - **Issues and service:** quick issue logging with X440 symptom suggestions, severity, resolution notes, next-service handover summary, structured key/value digital bills and separate ownership expenses.
 - **Ownership:** fuel, service and other costs; insurance/PUC reminders; default petrol rates; X440 quick-reference values; JSON backup/restore and CSV export.
 - **PWA experience:** safe-area support, one-thumb bottom navigation, dedicated centre fuel button, offline app shell and Firestore offline persistence.

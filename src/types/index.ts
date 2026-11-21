@@ -18,6 +18,34 @@ export interface BillEntry {
   value: string;
 }
 
+export type CareValueStatus = 'normal' | 'attention' | 'critical' | 'unrated';
+export type CareInsightTone = 'positive' | 'negative' | 'neutral';
+
+export interface CareObservation {
+  fieldId: string;
+  label: string;
+  mode: 'single' | 'before-after';
+  unit?: string;
+  targetLabel?: string;
+  value?: string;
+  valueLabel?: string;
+  valueStatus?: CareValueStatus;
+  beforeValue?: string;
+  beforeLabel?: string;
+  beforeStatus?: CareValueStatus;
+  afterValue?: string;
+  afterLabel?: string;
+  afterStatus?: CareValueStatus;
+}
+
+export interface CareInsightFlag {
+  id: string;
+  label: string;
+  tone: CareInsightTone;
+  affectsMileage: boolean;
+  unresolved: boolean;
+}
+
 export interface FuelLog {
   id: string;
   date: string; // YYYY-MM-DD
@@ -116,6 +144,9 @@ export interface MaintenanceLog {
   billEntries: BillEntry[];
   notes?: string;
   eventId?: string;
+  careTemplateId?: string;
+  observations?: CareObservation[];
+  insightFlags?: CareInsightFlag[];
   createdAt: number;
 }
 
@@ -140,6 +171,10 @@ export interface BikeEvent {
   workshop?: string;
   notes?: string;
   completedTaskIds: string[];
+  careTaskId?: string;
+  careTemplateId?: string;
+  observations?: CareObservation[];
+  insightFlags?: CareInsightFlag[];
   billEntries: BillEntry[];
   totalCost: number;
   createdAt: number;

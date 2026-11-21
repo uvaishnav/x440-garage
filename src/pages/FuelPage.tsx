@@ -5,21 +5,43 @@ import {
   computeFuelGradeStats,
   computeSummaryStats,
 } from '../lib/calculations';
-import { BikeEvent, FuelLog } from '../types';
+import { BikeEvent, FuelLog, MaintenanceLog } from '../types';
 import { EditIcon, LocationPinIcon, TrashIcon } from '../components/Icons';
 
 interface FuelPageProps {
   fuelLogs: FuelLog[];
   bikeEvents: BikeEvent[];
+  maintenanceLogs: MaintenanceLog[];
   onDeleteLog: (id: string) => Promise<void>;
   onEditLog: (log: FuelLog) => void;
 }
 
-export const FuelPage: React.FC<FuelPageProps> = ({ fuelLogs, bikeEvents, onDeleteLog, onEditLog }) => {
+export const FuelPage: React.FC<FuelPageProps> = ({ fuelLogs, bikeEvents, maintenanceLogs, onDeleteLog, onEditLog }) => {
   const computed = useMemo(() => computeFuelMetrics(fuelLogs), [fuelLogs]);
   const summary = useMemo(() => computeSummaryStats(computed), [computed]);
   const bunks = useMemo(() => computeBunkLeaderboard(computed), [computed]);
   const gradeStats = useMemo(() => computeFuelGradeStats(computed), [computed]);
+  const careContext = useMemo(
+    () => [
+      ...bikeEvents.map((event) => ({
+        id: `event-${event.id}`,
+        title: event.title,
+        date: event.date,
+        odometer: event.odometer,
+        flags: event.insightFlags || [],
+      })),
+      ...maintenanceLogs
+        .filter((log) => !log.eventId)
+        .map((log) => ({
+          id: `maintenance-${log.id}`,
+          title: log.taskTitle,
+          date: log.date,
+          odometer: log.odometer,
+          flags: log.insightFlags || [],
+        })),
+    ],
+    [bikeEvents, maintenanceLogs]
+  );
   const [selectedBunk, setSelectedBunk] = useState<string | null>(null);
 
   return (
@@ -170,11 +192,12 @@ export const FuelPage: React.FC<FuelPageProps> = ({ fuelLogs, bikeEvents, onDele
               const intervalStart = log.distanceKm ? log.odometer - log.distanceKm : null;
               const intervalEvents = intervalStart == null
                 ? []
-                : bikeEvents
+                : careContext
                     .filter(
                       (event) =>
                         event.odometer >= intervalStart - 250 &&
-                        event.odometer <= log.odometer
+                        event.odometer <= log.odometer &&
+                        event.date <= log.date
                     )
                     .sort((a, b) => a.odometer - b.odometer);
               const previousMeasured = computed
@@ -246,27 +269,41 @@ export const FuelPage: React.FC<FuelPageProps> = ({ fuelLogs, bikeEvents, onDele
                   {log.mileageKmpl && intervalEvents.length > 0 && (
                     <div className="mt-3 pt-3 border-t border-white/[0.07] space-y-2">
                       <div className="flex items-center justify-between gap-3">
-                        <p className="text-[11px] font-semibold text-[#F5F5F7]">Possible contributing events</p>
+                        <p className="text-[11px] font-semibold text-[#F5F5F7]">Care context for this interval</p>
                         {mileageChange != null && (
                           <span className={`text-[11px] font-semibold tabular-nums ${mileageChange >= 0 ? 'text-[#30D158]' : 'text-[#FF8A82]'}`}>
                             {mileageChange >= 0 ? '+' : ''}{mileageChange} km/L
                           </span>
                         )}
                       </div>
-                      {intervalEvents.map((event) => (
-                        <div key={event.id} className="flex items-start justify-between gap-3 text-[11px]">
-                          <div className="min-w-0">
-                            <p className="text-[#E5E5E8] truncate">{event.title}</p>
-                            <p className="text-[#73737A] tabular-nums">
-                              {event.date} · {event.odometer.toLocaleString('en-IN')} km
-                            </p>
+                      {intervalEvents.map((event) => {
+                        const mileageFlags = event.flags.filter((flag) => flag.affectsMileage);
+                        return (
+                          <div key={event.id} className="space-y-1.5 rounded-lg bg-[#0F1013] px-3 py-2.5">
+                            <div className="flex items-start justify-between gap-3 text-[11px]">
+                              <div className="min-w-0">
+                                <p className="text-[#E5E5E8] truncate">{event.title}</p>
+                                <p className="text-[#73737A] tabular-nums">
+                                  {event.date} · {event.odometer.toLocaleString('en-IN')} km
+                                </p>
+                              </div>
+                              <span className="shrink-0 text-[10px] text-[#FFB27A]">
+                                {event.odometer < (intervalStart ?? event.odometer) ? 'Before interval' : 'During interval'}
+                              </span>
+                            </div>
+                            {mileageFlags.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5">
+                                {mileageFlags.map((flag) => (
+                                  <span key={flag.id} className={`rounded-md px-2 py-1 text-[10px] leading-snug ${flag.tone === 'positive' ? 'bg-[#30D158]/12 text-[#76E596]' : flag.tone === 'negative' ? 'bg-[#FF453A]/12 text-[#FF9B95]' : 'bg-white/[0.06] text-[#C7C7CC]'}`}>
+                                    {flag.label}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                           </div>
-                          <span className="shrink-0 text-[10px] text-[#FFB27A]">
-                            {event.odometer < (intervalStart ?? event.odometer) ? 'Before interval' : 'During interval'}
-                          </span>
-                        </div>
-                      ))}
-                      <p className="text-[10px] text-[#636366]">Shown as context, not proof of cause.</p>
+                        );
+                      })}
+                      <p className="text-[10px] text-[#73737A]">Green and red signals are recorded context, not proof of cause.</p>
                     </div>
                   )}
                 </div>

@@ -2,8 +2,14 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BikeAnatomyMap } from '../components/BikeAnatomyMap';
 import { BillReceiptCard } from '../components/BillReceiptCard';
 import { BillReceiptEditor } from '../components/BillReceiptEditor';
+import { CareInspectionEditor } from '../components/CareInspectionEditor';
 import { AlertPulseIcon, CareIcon, CheckIcon, CloseIcon, PlusIcon, TrashIcon } from '../components/Icons';
 import { BIKE_EVENT_TEMPLATES } from '../data/bikeEventTemplates';
+import {
+  buildCareLogResult,
+  careTemplateFor,
+  CareFormValues,
+} from '../data/careLogTemplates';
 import {
   X440_QUICK_SPECS,
   X440_SYMPTOM_SUGGESTIONS,
@@ -16,6 +22,7 @@ import {
   BikeIssue,
   BikeZone,
   BillEntry,
+  CareInsightFlag,
   ExpenseCategory,
   ExpenseLog,
   FuelLog,
@@ -95,6 +102,8 @@ export const CarePage: React.FC<CarePageProps> = ({
   const [logOdo, setLogOdo] = useState(String(currentOdometer || ''));
   const [billEntries, setBillEntries] = useState<BillEntry[]>([]);
   const [logNotes, setLogNotes] = useState('');
+  const [logCareValues, setLogCareValues] = useState<CareFormValues>({});
+  const [logCareError, setLogCareError] = useState('');
   const [showTaskEditor, setShowTaskEditor] = useState(false);
   const [editingTask, setEditingTask] = useState<MaintenanceTask | null>(null);
   const [taskTitle, setTaskTitle] = useState('');
@@ -135,6 +144,7 @@ export const CarePage: React.FC<CarePageProps> = ({
   const [eventWorkshop, setEventWorkshop] = useState('');
   const [eventNotes, setEventNotes] = useState('');
   const [eventBillEntries, setEventBillEntries] = useState<BillEntry[]>([]);
+  const [eventCareValues, setEventCareValues] = useState<CareFormValues>({});
   const [eventTaskIds, setEventTaskIds] = useState<string[]>([]);
   const [eventSaving, setEventSaving] = useState(false);
   const [eventError, setEventError] = useState('');
@@ -168,6 +178,8 @@ export const CarePage: React.FC<CarePageProps> = ({
     setLogOdo(String(currentOdometer || ''));
     setBillEntries([]);
     setLogNotes('');
+    setLogCareValues({});
+    setLogCareError('');
   };
 
   const healthList = useMemo(
@@ -184,15 +196,30 @@ export const CarePage: React.FC<CarePageProps> = ({
     if (!template) return;
     setEventTemplateId(templateId);
     setEventCustomTitle('');
+    setEventCareValues({});
+    setEventError('');
     setEventTaskIds(
       template.selectDueTasks
         ? healthList
-            .filter(
-              (health) =>
+            .filter((health) => {
+              const latestLog = [...maintenanceLogs]
+                .filter((log) => log.taskId === health.task.id)
+                .sort(
+                  (a, b) =>
+                    b.odometer - a.odometer ||
+                    b.date.localeCompare(a.date) ||
+                    b.createdAt - a.createdAt
+                )[0];
+              const hasOpenFinding = (latestLog?.insightFlags || []).some(
+                (flag) => flag.unresolved
+              );
+              return (
+                hasOpenFinding ||
                 health.status === 'overdue' ||
                 (health.status === 'soon' &&
                   (health.remainingKm !== null || health.remainingDays !== null))
-            )
+              );
+            })
             .map((health) => health.task.id)
         : template.taskIds.filter((id) => tasks.some((task) => task.id === id))
     );
@@ -205,6 +232,7 @@ export const CarePage: React.FC<CarePageProps> = ({
     setEventWorkshop('');
     setEventNotes('');
     setEventBillEntries([]);
+    setEventCareValues({});
     setEventError('');
     setShowEventForm(true);
   };
@@ -220,6 +248,24 @@ export const CarePage: React.FC<CarePageProps> = ({
       return;
     }
 
+    const careResult = buildCareLogResult(
+      template.careTemplateId,
+      eventCareValues
+    );
+    if (careResult.missingFields.length > 0) {
+      setEventError(`Complete: ${careResult.missingFields.join(', ')}.`);
+      return;
+    }
+    const serviceFlags: CareInsightFlag[] = template.serviceAssumption
+      ? [{
+          id: 'periodic-service-complete',
+          label: 'Periodic service completed; selected items assumed restored',
+          tone: 'positive',
+          affectsMileage: true,
+          unresolved: false,
+        }]
+      : [];
+
     const cleanedEntries = eventBillEntries.filter(
       (entry) => entry.key.trim() !== '' || entry.value.trim() !== ''
     );
@@ -233,6 +279,12 @@ export const CarePage: React.FC<CarePageProps> = ({
       workshop: eventWorkshop.trim() || undefined,
       notes: eventNotes.trim() || undefined,
       completedTaskIds: eventTaskIds,
+      careTaskId: tasks.some((task) => task.id === template.careTemplateId)
+        ? template.careTemplateId
+        : undefined,
+      careTemplateId: template.careTemplateId,
+      observations: careResult.observations,
+      insightFlags: [...serviceFlags, ...careResult.insightFlags],
       billEntries: cleanedEntries,
       totalCost: sumBillEntries(cleanedEntries),
       createdAt: Date.now(),
@@ -255,6 +307,11 @@ export const CarePage: React.FC<CarePageProps> = ({
     e.preventDefault();
     if (!activeTask) return;
     const odo = parseFloat(logOdo) || currentOdometer;
+    const careResult = buildCareLogResult(activeTask.id, logCareValues);
+    if (careResult.missingFields.length > 0) {
+      setLogCareError(`Complete: ${careResult.missingFields.join(', ')}.`);
+      return;
+    }
     const cleanedEntries = billEntries.filter(
       (b) => b.key.trim() !== '' || b.value.trim() !== ''
     );
@@ -269,6 +326,9 @@ export const CarePage: React.FC<CarePageProps> = ({
       totalCost,
       billEntries: cleanedEntries,
       notes: logNotes.trim() || undefined,
+      careTemplateId: careTemplateFor(activeTask.id)?.id,
+      observations: careResult.observations,
+      insightFlags: careResult.insightFlags,
       createdAt: Date.now(),
     };
     await onCompleteTask(activeTask, log);
@@ -412,13 +472,24 @@ export const CarePage: React.FC<CarePageProps> = ({
   };
 
   const csvCell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+  const careDetails = (record: Pick<MaintenanceLog, 'observations' | 'insightFlags' | 'notes'>) => [
+    ...(record.observations || []).map((observation) =>
+      observation.mode === 'before-after'
+        ? `${observation.label}: ${observation.beforeLabel || '—'} -> ${observation.afterLabel || '—'}`
+        : `${observation.label}: ${observation.valueLabel || observation.value || '—'}`
+    ),
+    ...(record.insightFlags || []).map((flag) =>
+      `${flag.tone}${flag.unresolved ? '/open' : ''}: ${flag.label}`
+    ),
+    record.notes || '',
+  ].filter(Boolean).join(' | ');
 
   const handleExportCsv = () => {
     const rows: unknown[][] = [['record_type', 'date', 'odometer', 'title', 'amount', 'details']];
     fuelLogs.forEach((log) => rows.push(['fuel', log.date, log.odometer, `${log.fuelGrade} · ${log.bunkName}`, log.totalCost, `${log.litres} L · ${log.rideMix} · ${log.isFullTank ? 'full' : 'partial'}`]));
     trips.forEach((trip) => rows.push(['trip', trip.startDate, trip.startOdometer, trip.name, '', `${trip.status} · expected ${trip.expectedKm} km · end ${trip.endOdometer || ''}`]));
-    maintenanceLogs.forEach((log) => rows.push(['maintenance', log.date, log.odometer, log.taskTitle, log.totalCost, log.notes || '']));
-    bikeEvents.forEach((event) => rows.push(['bike_event', event.date, event.odometer, event.title, event.totalCost, `${event.kind} · ${event.workshop || ''} · ${event.notes || ''}`]));
+    maintenanceLogs.forEach((log) => rows.push(['maintenance', log.date, log.odometer, log.taskTitle, log.totalCost, careDetails(log)]));
+    bikeEvents.forEach((event) => rows.push(['bike_event', event.date, event.odometer, event.title, event.totalCost, `${event.kind} · ${event.workshop || ''} · ${careDetails(event)}`]));
     issues.forEach((issue) => rows.push(['issue', issue.date, issue.odometer, issue.title, '', `${issue.severity} · ${issue.status} · ${issue.notes || ''}`]));
     expenses.forEach((expense) => rows.push(['expense', expense.date, expense.odometer || '', expense.title, expense.amount, `${expense.category} · ${expense.notes || ''}`]));
     downloadText(
@@ -450,10 +521,36 @@ export const CarePage: React.FC<CarePageProps> = ({
     : currentOdometer + 1000;
   const dueForService = healthList.filter((health) =>
     health.status === 'overdue' ||
-    health.remainingKm === null ||
     (health.remainingKm != null && health.remainingKm <= serviceOdometer - currentOdometer) ||
     (health.remainingDays != null && health.remainingDays <= 30)
   );
+  const latestTaskLogs = new Map<string, MaintenanceLog>();
+  [...maintenanceLogs]
+    .sort(
+      (a, b) =>
+        b.odometer - a.odometer ||
+        b.date.localeCompare(a.date) ||
+        b.createdAt - a.createdAt
+    )
+    .forEach((log) => {
+      if (!latestTaskLogs.has(log.taskId)) latestTaskLogs.set(log.taskId, log);
+    });
+  const unresolvedFindings = tasks.flatMap((task) => {
+    const log = latestTaskLogs.get(task.id);
+    if (!log) return [];
+    return (log.insightFlags || [])
+      .filter((flag) => flag.unresolved)
+      .map((flag) => ({ task, log, flag }));
+  });
+  const unresolvedStandaloneEvents = bikeEvents.flatMap((event) =>
+    event.careTaskId
+      ? []
+      : (event.insightFlags || [])
+          .filter((flag) => flag.unresolved)
+          .map((flag) => ({ event, flag }))
+  );
+  const unresolvedConditionCount =
+    unresolvedFindings.length + unresolvedStandaloneEvents.length;
   const serviceTotal =
     maintenanceLogs.reduce((sum, log) => sum + log.totalCost, 0) +
     bikeEvents.reduce((sum, event) => sum + event.totalCost, 0);
@@ -469,10 +566,30 @@ export const CarePage: React.FC<CarePageProps> = ({
       `Next service target: ${serviceOdometer} km`,
       '',
       'Maintenance due:',
-      ...dueForService.map((item) => `• ${item.task.title}`),
+      ...(dueForService.length
+        ? dueForService.map((item) => `• ${item.task.title}`)
+        : ['• None currently due from recorded baselines']),
+      '',
+      'Measured findings still out of range:',
+      ...(
+        unresolvedFindings.length || unresolvedStandaloneEvents.length
+          ? [
+              ...unresolvedFindings.map(
+                ({ task, log, flag }) =>
+                  `• ${task.title}: ${flag.label} (${log.date} @ ${log.odometer} km)`
+              ),
+              ...unresolvedStandaloneEvents.map(
+                ({ event, flag }) =>
+                  `• ${event.title}: ${flag.label} (${event.date} @ ${event.odometer} km)`
+              ),
+            ]
+          : ['• None']
+      ),
       '',
       'Open issues:',
-      ...openIssues.map((issue) => `• [${issue.severity}] ${issue.title} — ${issue.notes || issue.symptomCategory}`),
+      ...(openIssues.length
+        ? openIssues.map((issue) => `• [${issue.severity}] ${issue.title} — ${issue.notes || issue.symptomCategory}`)
+        : ['• None']),
     ];
     const text = lines.join('\n');
     if (navigator.share) {
@@ -550,6 +667,8 @@ export const CarePage: React.FC<CarePageProps> = ({
 
           <div className="space-y-2.5">
             {visibleHealth.map((h) => {
+              const latestLog = latestTaskLogs.get(h.task.id);
+              const latestSignals = latestLog?.insightFlags || [];
               const badgeColor =
                 h.status === 'overdue'
                   ? 'text-[#FF453A] bg-[#FF453A]/15'
@@ -592,6 +711,16 @@ export const CarePage: React.FC<CarePageProps> = ({
                     </p>
                   )}
 
+                  {latestSignals.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {latestSignals.slice(0, 3).map((flag) => (
+                        <span key={flag.id} className={`rounded-lg px-2 py-1 text-[10px] ${flag.tone === 'positive' ? 'bg-[#30D158]/12 text-[#76E596]' : flag.tone === 'negative' ? 'bg-[#FF453A]/12 text-[#FF9B95]' : 'bg-white/[0.06] text-[#C7C7CC]'}`}>
+                          {flag.label}{flag.unresolved ? ' · open' : ''}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
                   {/* Progress Bar */}
                   <div className="h-1.5 w-full rounded-full bg-[#1F2126] overflow-hidden">
                     <div
@@ -623,12 +752,12 @@ export const CarePage: React.FC<CarePageProps> = ({
           </div>
 
           {/* Digital Service Bill Receipts */}
-          {maintenanceLogs.length > 0 && (
+          {maintenanceLogs.some((log) => !log.eventId) && (
             <section className="space-y-2.5 pt-2">
               <h2 className="text-sm font-semibold text-[#F5F5F7] px-1">
                 Service Receipts & History
               </h2>
-              {maintenanceLogs.map((log) => (
+              {maintenanceLogs.filter((log) => !log.eventId).map((log) => (
                 <BillReceiptCard key={log.id} log={log} />
               ))}
             </section>
@@ -746,15 +875,52 @@ export const CarePage: React.FC<CarePageProps> = ({
               <div><p className="text-sm font-semibold text-[#F5F5F7]">Next Service Handover</p><p className="text-[11px] text-[#8E8E93] mt-0.5">Prepared for {serviceOdometer.toLocaleString('en-IN')} km</p></div>
               <button onClick={shareServiceHandover} className="h-9 px-3 rounded-xl bg-[#FF6600] text-white text-xs font-semibold">Share</button>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-xl bg-[#1F2126] p-3"><p className="text-[10px] text-[#8E8E93]">Care items</p><p className="text-xl font-semibold text-[#F5F5F7]">{dueForService.length}</p></div>
-              <div className="rounded-xl bg-[#1F2126] p-3"><p className="text-[10px] text-[#8E8E93]">Open issues</p><p className="text-xl font-semibold text-[#F5F5F7]">{openIssues.length}</p></div>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="rounded-xl bg-[#1F2126] p-3"><p className="text-[10px] text-[#A7A7AD]">Due</p><p className="text-xl font-semibold text-[#F5F5F7]">{dueForService.length}</p></div>
+              <div className="rounded-xl bg-[#1F2126] p-3"><p className="text-[10px] text-[#A7A7AD]">Out of range</p><p className={`text-xl font-semibold ${unresolvedConditionCount ? 'text-[#FF8A82]' : 'text-[#30D158]'}`}>{unresolvedConditionCount}</p></div>
+              <div className="rounded-xl bg-[#1F2126] p-3"><p className="text-[10px] text-[#A7A7AD]">Issues</p><p className="text-xl font-semibold text-[#F5F5F7]">{openIssues.length}</p></div>
             </div>
           </div>
 
           <section className="space-y-2">
-            <h2 className="text-sm font-semibold text-[#F5F5F7] px-1">Maintenance to discuss</h2>
-            {dueForService.map((health) => <div key={health.task.id} className="rounded-xl bg-[#141518] border border-white/[0.08] px-4 py-3"><p className="text-sm text-[#F5F5F7]">{health.task.title}</p><p className="text-[11px] text-[#8E8E93] mt-0.5">{health.task.description}</p></div>)}
+            <div className="px-1">
+              <h2 className="text-sm font-semibold text-[#F5F5F7]">Measured findings to fix</h2>
+              <p className="text-[11px] text-[#8E8E93] mt-0.5">Only the latest readings that remain outside their target.</p>
+            </div>
+            {unresolvedConditionCount === 0 ? (
+              <div className="rounded-xl bg-[#30D158]/8 border border-[#30D158]/15 px-4 py-3 text-xs text-[#76E596]">
+                No recorded measurements are currently out of range.
+              </div>
+            ) : (
+              <>
+                {unresolvedFindings.map(({ task, log, flag }) => (
+                  <div key={`${task.id}-${flag.id}`} className="rounded-xl bg-[#FF453A]/8 border border-[#FF453A]/15 px-4 py-3">
+                    <p className="text-sm font-medium text-[#F5F5F7]">{task.title}</p>
+                    <p className="text-xs text-[#FF9B95] mt-1">{flag.label}</p>
+                    <p className="text-[10px] text-[#8E8E93] mt-1 tabular-nums">Last checked {log.date} @ {log.odometer.toLocaleString('en-IN')} km</p>
+                  </div>
+                ))}
+                {unresolvedStandaloneEvents.map(({ event, flag }) => (
+                  <div key={`${event.id}-${flag.id}`} className="rounded-xl bg-[#FF453A]/8 border border-[#FF453A]/15 px-4 py-3">
+                    <p className="text-sm font-medium text-[#F5F5F7]">{event.title}</p>
+                    <p className="text-xs text-[#FF9B95] mt-1">{flag.label}</p>
+                    <p className="text-[10px] text-[#8E8E93] mt-1 tabular-nums">Logged {event.date} @ {event.odometer.toLocaleString('en-IN')} km</p>
+                  </div>
+                ))}
+              </>
+            )}
+          </section>
+
+          <section className="space-y-2">
+            <h2 className="text-sm font-semibold text-[#F5F5F7] px-1">Maintenance due by schedule</h2>
+            {dueForService.length === 0 ? (
+              <p className="rounded-xl bg-[#141518] border border-white/[0.08] px-4 py-3 text-xs text-[#A7A7AD]">No initialized care item is due before this service target.</p>
+            ) : dueForService.map((health) => (
+              <div key={health.task.id} className="rounded-xl bg-[#141518] border border-white/[0.08] px-4 py-3">
+                <p className="text-sm text-[#F5F5F7]">{health.task.title}</p>
+                <p className="text-[11px] text-[#8E8E93] mt-0.5">{health.task.description}</p>
+              </div>
+            ))}
           </section>
 
           {openIssues.length > 0 && <section className="space-y-2"><h2 className="text-sm font-semibold text-[#F5F5F7] px-1">Open issues</h2>{openIssues.map((issue) => <div key={issue.id} className="rounded-xl bg-[#141518] border border-white/[0.08] px-4 py-3"><div className="flex justify-between gap-3"><p className="text-sm text-[#F5F5F7]">{issue.title}</p><span className="text-[10px] text-[#FFD60A]">{issue.severity}</span></div><p className="text-[11px] text-[#8E8E93] mt-0.5">{issue.notes || issue.symptomCategory}</p></div>)}</section>}
@@ -809,9 +975,35 @@ export const CarePage: React.FC<CarePageProps> = ({
                         ))}
                       </div>
                     )}
-                    {event.billEntries.length > 0 && (
+                    {(event.observations || []).length > 0 && (
+                      <div className="divide-y divide-white/[0.05] rounded-xl bg-[#0F1013] border border-white/[0.06] px-3.5 py-1">
+                        {(event.observations || []).map((observation) => (
+                          <div key={observation.fieldId} className="py-2 flex items-start justify-between gap-3 text-xs">
+                            <div>
+                              <p className="text-[#A7A7AD]">{observation.label}</p>
+                              {observation.targetLabel && <p className="text-[10px] text-[#73737A] mt-0.5">{observation.targetLabel}</p>}
+                            </div>
+                            <p className="max-w-[58%] text-right text-[#F5F5F7] font-medium tabular-nums break-words">
+                              {observation.mode === 'before-after'
+                                ? `${observation.beforeLabel || '—'} → ${observation.afterLabel || '—'}`
+                                : observation.valueLabel || observation.value || '—'}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {(event.insightFlags || []).length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {(event.insightFlags || []).map((flag) => (
+                          <span key={flag.id} className={`rounded-lg px-2 py-1 text-[10px] ${flag.tone === 'positive' ? 'bg-[#30D158]/12 text-[#76E596]' : flag.tone === 'negative' ? 'bg-[#FF453A]/12 text-[#FF9B95]' : 'bg-white/[0.06] text-[#C7C7CC]'}`}>
+                            {flag.label}{flag.unresolved ? ' · open' : ''}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {(event.billEntries || []).length > 0 && (
                       <div className="rounded-xl bg-[#0F1013] border border-white/[0.06] px-3.5 py-2 divide-y divide-white/[0.05]">
-                        {event.billEntries.map((entry, index) => {
+                        {(event.billEntries || []).map((entry, index) => {
                           const numericValue = entry.value.trim().replace(/[₹,\s]/g, '');
                           const looksLikeCost =
                             /^\d+(\.\d+)?$/.test(numericValue) &&
@@ -1059,6 +1251,14 @@ export const CarePage: React.FC<CarePageProps> = ({
                 <input maxLength={100} value={eventWorkshop} onChange={(event) => setEventWorkshop(event.target.value)} placeholder="e.g. Premia Vijayawada" className="field h-11 mt-1.5" />
               </label>
 
+              {selectedEventTemplate.careTemplateId && (
+                <CareInspectionEditor
+                  templateId={selectedEventTemplate.careTemplateId}
+                  values={eventCareValues}
+                  onChange={setEventCareValues}
+                />
+              )}
+
               <fieldset className="space-y-2">
                 <legend className="text-xs font-semibold text-[#F5F5F7]">Maintenance completed</legend>
                 <div className="flex items-center justify-between gap-3">
@@ -1086,7 +1286,11 @@ export const CarePage: React.FC<CarePageProps> = ({
                 </div>
               </fieldset>
 
-              <BillReceiptEditor entries={eventBillEntries} onChange={setEventBillEntries} />
+              <BillReceiptEditor
+                entries={eventBillEntries}
+                onChange={setEventBillEntries}
+                presetKeys={selectedEventTemplate.billKeys}
+              />
 
               <textarea
                 rows={3}
@@ -1156,7 +1360,19 @@ export const CarePage: React.FC<CarePageProps> = ({
                 </div>
               </div>
 
-              <BillReceiptEditor entries={billEntries} onChange={setBillEntries} />
+              {careTemplateFor(activeTask.id) && (
+                <CareInspectionEditor
+                  templateId={activeTask.id}
+                  values={logCareValues}
+                  onChange={setLogCareValues}
+                />
+              )}
+
+              <BillReceiptEditor
+                entries={billEntries}
+                onChange={setBillEntries}
+                presetKeys={careTemplateFor(activeTask.id)?.billKeys}
+              />
 
               <textarea
                 rows={2}
@@ -1165,6 +1381,12 @@ export const CarePage: React.FC<CarePageProps> = ({
                 onChange={(e) => setLogNotes(e.target.value)}
                 className="w-full p-3 rounded-xl bg-[#1F2126] border border-white/[0.08] text-sm text-[#F5F5F7] placeholder:text-[#636366] focus:outline-none focus:border-[#FF6600]"
               />
+
+              {logCareError && (
+                <p role="alert" className="rounded-xl bg-[#FF453A]/10 px-3 py-2 text-xs text-[#FFAAA5]">
+                  {logCareError}
+                </p>
+              )}
 
               <button
                 type="submit"

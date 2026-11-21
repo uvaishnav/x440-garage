@@ -7,11 +7,13 @@ import { PlusIcon, TrashIcon } from './Icons';
 interface BillReceiptEditorProps {
   entries: BillEntry[];
   onChange: (next: BillEntry[]) => void;
+  presetKeys?: string[];
 }
 
 export const BillReceiptEditor: React.FC<BillReceiptEditorProps> = ({
   entries,
   onChange,
+  presetKeys = PRESET_BILL_KEYS,
 }) => {
   const addRow = (presetKey = '') => {
     onChange([...entries, { key: presetKey, value: '' }]);
@@ -45,7 +47,7 @@ export const BillReceiptEditor: React.FC<BillReceiptEditorProps> = ({
 
       {/* 1-Tap Preset Keys */}
       <div className="flex flex-wrap gap-1.5">
-        {PRESET_BILL_KEYS.map((preset) => (
+        {presetKeys.map((preset) => (
           <button
             key={preset}
             type="button"

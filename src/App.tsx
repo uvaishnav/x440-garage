@@ -109,6 +109,7 @@ export default function App() {
           <FuelPage
             fuelLogs={garage.fuelLogs}
             bikeEvents={garage.bikeEvents}
+            maintenanceLogs={garage.maintenanceLogs}
             onDeleteLog={garage.deleteFuelLog}
             onEditLog={(log) => {
               setEditingFuelLog(log);
