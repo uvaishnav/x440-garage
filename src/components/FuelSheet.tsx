@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AppSettings, FuelGrade, FuelLog, RideMix, Trip } from '../types';
 import { fetchNearbyBunks, getCurrentPosition, NearbyBunk } from '../lib/overpass';
 import { CloseIcon, LocationPinIcon } from './Icons';
+import { localDateInputValue } from '../lib/date';
 
 interface FuelSheetProps {
   open: boolean;
@@ -11,6 +12,7 @@ interface FuelSheetProps {
   activeTrip: Trip | null;
   recentLogs: FuelLog[];
   onSave: (log: FuelLog) => Promise<void>;
+  editingLog?: FuelLog | null;
 }
 
 const GRADES: FuelGrade[] = ['Regular', 'XP95', 'Power'];
@@ -24,12 +26,15 @@ export const FuelSheet: React.FC<FuelSheetProps> = ({
   activeTrip,
   recentLogs,
   onSave,
+  editingLog,
 }) => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDateInputValue();
 
   const [date, setDate] = useState(today);
   const [odometer, setOdometer] = useState('');
   const [litres, setLitres] = useState('');
+  const [totalPaid, setTotalPaid] = useState('');
+  const [amountMode, setAmountMode] = useState<'litres' | 'total'>('litres');
   const [fuelGrade, setFuelGrade] = useState<FuelGrade>('Regular');
   const [pricePerLitre, setPricePerLitre] = useState(String(settings.fuelRates.Regular));
   const [isFullTank, setIsFullTank] = useState(true);
@@ -38,11 +43,13 @@ export const FuelSheet: React.FC<FuelSheetProps> = ({
   const [bunkLocation, setBunkLocation] = useState('');
   const [bunkCoords, setBunkCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [linkActiveTrip, setLinkActiveTrip] = useState(Boolean(activeTrip));
+  const [notes, setNotes] = useState('');
 
   const [nearbyBunks, setNearbyBunks] = useState<NearbyBunk[]>([]);
   const [locating, setLocating] = useState(false);
   const [locError, setLocError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   // Unique recent bunks for 1-tap backdated entry
   const recentBunkNames = useMemo(() => {
@@ -62,21 +69,29 @@ export const FuelSheet: React.FC<FuelSheetProps> = ({
   // Reset form each time sheet opens
   useEffect(() => {
     if (!open) return;
-    setDate(new Date().toISOString().slice(0, 10));
-    setOdometer(currentOdometer > 0 ? String(currentOdometer) : '');
-    setLitres('');
-    setFuelGrade('Regular');
-    setPricePerLitre(String(settings.fuelRates.Regular));
-    setIsFullTank(true);
-    setRideMix(activeTrip ? 'Highway' : 'City');
-    setLinkActiveTrip(Boolean(activeTrip));
-    setBunkName('');
-    setBunkLocation('');
-    setBunkCoords(null);
+    setDate(editingLog?.date || localDateInputValue());
+    setOdometer(editingLog ? String(editingLog.odometer) : currentOdometer > 0 ? String(currentOdometer) : '');
+    setLitres(editingLog ? String(editingLog.litres) : '');
+    setTotalPaid(editingLog ? String(editingLog.totalCost) : '');
+    setAmountMode('litres');
+    setFuelGrade(editingLog?.fuelGrade || 'Regular');
+    setPricePerLitre(String(editingLog?.pricePerLitre ?? settings.fuelRates.Regular));
+    setIsFullTank(editingLog?.isFullTank ?? true);
+    setRideMix(editingLog?.rideMix || (activeTrip ? 'Highway' : 'City'));
+    setLinkActiveTrip(editingLog ? Boolean(editingLog.tripId) : Boolean(activeTrip));
+    setBunkName(editingLog?.bunkName || '');
+    setBunkLocation(editingLog?.bunkLocation || '');
+    setBunkCoords(
+      editingLog?.bunkLat != null && editingLog?.bunkLng != null
+        ? { lat: editingLog.bunkLat, lng: editingLog.bunkLng }
+        : null
+    );
+    setNotes(editingLog?.notes || '');
     setLocError('');
+    setSaveError('');
 
     // Auto-detect nearby petrol bunks on open
-    detectNearbyBunks();
+    if (!editingLog) detectNearbyBunks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -104,9 +119,11 @@ export const FuelSheet: React.FC<FuelSheetProps> = ({
     setPricePerLitre(String(settings.fuelRates[grade] || settings.fuelRates.Regular));
   };
 
-  const numLitres = parseFloat(litres) || 0;
   const numRate = parseFloat(pricePerLitre) || 0;
-  const computedTotal = Math.round(numLitres * numRate);
+  const typedLitres = parseFloat(litres) || 0;
+  const typedTotal = parseFloat(totalPaid) || 0;
+  const numLitres = amountMode === 'total' && numRate > 0 ? typedTotal / numRate : typedLitres;
+  const computedTotal = amountMode === 'total' ? typedTotal : typedLitres * numRate;
   const numOdo = parseFloat(odometer) || 0;
 
   const isBackdated = date < today;
@@ -118,14 +135,15 @@ export const FuelSheet: React.FC<FuelSheetProps> = ({
     if (numOdo <= 0 || numLitres <= 0) return;
 
     setSaving(true);
+    setSaveError('');
     try {
       const log: FuelLog = {
-        id: `fuel-${Date.now()}`,
+        id: editingLog?.id || `fuel-${Date.now()}`,
         date,
         odometer: numOdo,
         litres: Number(numLitres.toFixed(2)),
         pricePerLitre: Number(numRate.toFixed(2)),
-        totalCost: computedTotal,
+        totalCost: Number(computedTotal.toFixed(2)),
         isFullTank,
         fuelGrade,
         rideMix,
@@ -133,11 +151,14 @@ export const FuelSheet: React.FC<FuelSheetProps> = ({
         bunkLocation: bunkLocation.trim() || undefined,
         bunkLat: bunkCoords?.lat,
         bunkLng: bunkCoords?.lng,
-        tripId: linkActiveTrip && activeTrip ? activeTrip.id : null,
-        createdAt: Date.now(),
+        tripId: linkActiveTrip ? editingLog?.tripId || activeTrip?.id || null : null,
+        notes: notes.trim() || undefined,
+        createdAt: editingLog?.createdAt || Date.now(),
       };
       await onSave(log);
       onClose();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Could not save this fuel log.');
     } finally {
       setSaving(false);
     }
@@ -153,7 +174,9 @@ export const FuelSheet: React.FC<FuelSheetProps> = ({
           <div className="w-10 h-1 rounded-full bg-white/20 mx-auto mb-3" />
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-[#F5F5F7]">Log Fuel</h2>
+              <h2 className="text-lg font-semibold text-[#F5F5F7]">
+                {editingLog ? 'Edit Fuel Log' : 'Log Fuel'}
+              </h2>
               <p className="text-[11px] text-[#8E8E93]">
                 {activeTrip && linkActiveTrip
                   ? `Linked to trip: ${activeTrip.name}`
@@ -171,7 +194,22 @@ export const FuelSheet: React.FC<FuelSheetProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-5 space-y-5">
-          {/* Primary 2 Numeric Inputs: Odometer & Litres */}
+          <div className="grid grid-cols-2 gap-1 p-1 rounded-xl bg-[#1F2126] border border-white/[0.08]">
+            {(['litres', 'total'] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setAmountMode(mode)}
+                className={`h-9 rounded-lg text-xs font-semibold ${
+                  amountMode === mode ? 'bg-[#34363D] text-[#F5F5F7]' : 'text-[#8E8E93]'
+                }`}
+              >
+                {mode === 'litres' ? 'Enter Litres' : 'Enter Total Paid'}
+              </button>
+            ))}
+          </div>
+
+          {/* Primary numeric inputs */}
           <div className="grid grid-cols-2 gap-3">
             <div className="rounded-2xl bg-[#1F2126] border border-white/[0.08] p-3.5 focus-within:border-[#FF6600]">
               <label className="text-[11px] uppercase tracking-wider text-[#8E8E93] font-medium block">
@@ -191,20 +229,28 @@ export const FuelSheet: React.FC<FuelSheetProps> = ({
 
             <div className="rounded-2xl bg-[#1F2126] border border-white/[0.08] p-3.5 focus-within:border-[#FF6600]">
               <label className="text-[11px] uppercase tracking-wider text-[#8E8E93] font-medium block">
-                Fuel (Litres)
+                {amountMode === 'litres' ? 'Fuel (Litres)' : 'Total Paid (₹)'}
               </label>
               <input
                 type="number"
                 inputMode="decimal"
                 step="0.01"
                 required
-                placeholder="8.50"
-                value={litres}
-                onChange={(e) => setLitres(e.target.value)}
+                placeholder={amountMode === 'litres' ? '8.50' : '900'}
+                value={amountMode === 'litres' ? litres : totalPaid}
+                onChange={(e) =>
+                  amountMode === 'litres' ? setLitres(e.target.value) : setTotalPaid(e.target.value)
+                }
                 className="w-full bg-transparent text-2xl font-semibold text-[#FF6600] tabular-nums mt-1 focus:outline-none"
               />
             </div>
           </div>
+
+          {amountMode === 'total' && numRate > 0 && (
+            <p className="text-xs text-[#8E8E93] -mt-3 px-1 tabular-nums">
+              Calculates to {numLitres.toFixed(2)} L at ₹{numRate.toFixed(2)}/L
+            </p>
+          )}
 
           {odoWarning && (
             <p className="text-xs text-[#FFD60A] bg-[#FFD60A]/10 border border-[#FFD60A]/25 rounded-xl px-3 py-2">
@@ -225,6 +271,9 @@ export const FuelSheet: React.FC<FuelSheetProps> = ({
             <button
               type="button"
               onClick={() => setIsFullTank((v) => !v)}
+              role="switch"
+              aria-checked={isFullTank}
+              aria-label="Tank full"
               className={`w-12 h-7 rounded-full p-0.5 transition-colors ${
                 isFullTank ? 'bg-[#30D158]' : 'bg-[#3A3A3C]'
               }`}
@@ -347,7 +396,7 @@ export const FuelSheet: React.FC<FuelSheetProps> = ({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs text-[#8E8E93] font-medium block mb-1.5">
-                Riding Mix
+                Riding Since Last Full Fill
               </label>
               <div className="grid grid-cols-3 gap-1 bg-[#1F2126] p-1 rounded-xl border border-white/[0.06]">
                 {MIXES.map((m) => (
@@ -396,12 +445,28 @@ export const FuelSheet: React.FC<FuelSheetProps> = ({
             </label>
           )}
 
+          <textarea
+            rows={2}
+            value={notes}
+            onChange={(event) => setNotes(event.target.value)}
+            placeholder="Notes (optional)"
+            className="w-full p-3 rounded-xl bg-[#1F2126] border border-white/[0.08] text-sm text-[#F5F5F7] placeholder:text-[#8E8E93] focus:outline-none focus:border-[#FF6600]"
+          />
+
+          {saveError && (
+            <p role="alert" className="text-xs text-[#FF8A82] bg-[#FF453A]/10 border border-[#FF453A]/25 rounded-xl px-3 py-2">
+              {saveError}
+            </p>
+          )}
+
           <button
             type="submit"
             disabled={saving || numOdo <= 0 || numLitres <= 0}
             className="w-full h-14 rounded-2xl bg-gradient-to-r from-[#FF6600] to-[#F58220] text-white font-semibold text-[15px] shadow-[0_8px_24px_rgba(255,102,0,0.3)] active:scale-[0.98] transition-transform disabled:opacity-50"
           >
-            {saving ? 'Saving...' : `Save Fill · ₹${computedTotal.toLocaleString('en-IN')}`}
+            {saving
+              ? 'Saving...'
+              : `${editingLog ? 'Update' : 'Save'} Fill · ₹${computedTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`}
           </button>
         </form>
       </div>

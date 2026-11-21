@@ -1,21 +1,25 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   computeBunkLeaderboard,
   computeFuelMetrics,
+  computeFuelGradeStats,
   computeSummaryStats,
 } from '../lib/calculations';
 import { FuelLog } from '../types';
-import { LocationPinIcon, TrashIcon } from '../components/Icons';
+import { EditIcon, LocationPinIcon, TrashIcon } from '../components/Icons';
 
 interface FuelPageProps {
   fuelLogs: FuelLog[];
   onDeleteLog: (id: string) => Promise<void>;
+  onEditLog: (log: FuelLog) => void;
 }
 
-export const FuelPage: React.FC<FuelPageProps> = ({ fuelLogs, onDeleteLog }) => {
+export const FuelPage: React.FC<FuelPageProps> = ({ fuelLogs, onDeleteLog, onEditLog }) => {
   const computed = useMemo(() => computeFuelMetrics(fuelLogs), [fuelLogs]);
   const summary = useMemo(() => computeSummaryStats(computed), [computed]);
   const bunks = useMemo(() => computeBunkLeaderboard(computed), [computed]);
+  const gradeStats = useMemo(() => computeFuelGradeStats(computed), [computed]);
+  const [selectedBunk, setSelectedBunk] = useState<string | null>(null);
 
   return (
     <div className="space-y-6">
@@ -53,6 +57,38 @@ export const FuelPage: React.FC<FuelPageProps> = ({ fuelLogs, onDeleteLog }) => 
         </div>
       </div>
 
+      <div className="rounded-2xl bg-[#141518] border border-white/[0.08] px-4 py-3 flex items-center justify-between">
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-[#8E8E93]">Measured fuel cost</p>
+          <p className="text-lg font-semibold text-[#F5F5F7] tabular-nums mt-0.5">
+            {summary.fuelCostPerKm == null ? '—' : `₹${summary.fuelCostPerKm}/km`}
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-[10px] uppercase tracking-wider text-[#8E8E93]">All-time fuel spend</p>
+          <p className="text-lg font-semibold text-[#F5F5F7] tabular-nums mt-0.5">
+            ₹{summary.totalSpend.toLocaleString('en-IN')}
+          </p>
+        </div>
+      </div>
+
+      {gradeStats.length > 0 && (
+        <section className="space-y-2.5">
+          <h2 className="text-sm font-semibold text-[#F5F5F7] px-1">Fuel Grade Comparison</h2>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {gradeStats.map((grade) => (
+              <div key={grade.grade} className="min-w-[132px] rounded-xl bg-[#141518] border border-white/[0.08] px-3.5 py-3">
+                <p className="text-xs text-[#8E8E93]">{grade.grade}</p>
+                <p className="text-xl font-semibold text-[#F5F5F7] tabular-nums mt-1">
+                  {grade.avgMileage} <span className="text-[10px] text-[#636366]">km/L</span>
+                </p>
+                <p className="text-[10px] text-[#636366] mt-1">{grade.samples} clean interval{grade.samples === 1 ? '' : 's'}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Petrol Bunk Leaderboard */}
       <section className="space-y-2.5">
         <div className="flex items-center justify-between px-1">
@@ -67,11 +103,13 @@ export const FuelPage: React.FC<FuelPageProps> = ({ fuelLogs, onDeleteLog }) => 
         ) : (
           <div className="space-y-2">
             {bunks.map((b, idx) => (
-              <div
+              <button
                 key={b.bunkName}
-                className="rounded-2xl bg-[#141518] border border-white/[0.08] px-4 py-3.5 flex items-center justify-between gap-3"
+                onClick={() => setSelectedBunk(selectedBunk === b.bunkName ? null : b.bunkName)}
+                className="w-full rounded-2xl bg-[#141518] border border-white/[0.08] px-4 py-3.5 text-left"
               >
-                <div className="min-w-0">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span
                       className={`text-xs font-semibold tabular-nums w-5 ${
@@ -90,17 +128,28 @@ export const FuelPage: React.FC<FuelPageProps> = ({ fuelLogs, onDeleteLog }) => 
                     {b.fullFillCount} full fill{b.fullFillCount > 1 ? 's' : ''}
                     {b.cityMileage ? ` · City ${b.cityMileage}` : ''}
                     {b.highwayMileage ? ` · Hwy ${b.highwayMileage}` : ''}
-                    {b.fullFillCount < 2 ? ' · Needs 2+ fills to confirm' : ''}
                   </p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="text-lg font-semibold text-[#F5F5F7] tabular-nums">
+                      {b.avgMileage}
+                    </p>
+                    <p className="text-[10px] text-[#636366]">km/L</p>
+                  </div>
                 </div>
-
-                <div className="text-right shrink-0">
-                  <p className="text-lg font-semibold text-[#F5F5F7] tabular-nums">
-                    {b.avgMileage}
-                  </p>
-                  <p className="text-[10px] text-[#636366]">km/L</p>
-                </div>
-              </div>
+                {selectedBunk === b.bunkName && (
+                  <div className="mt-3 pt-3 border-t border-white/[0.06] space-y-1.5">
+                    {computed
+                      .filter((log) => log.sourceBunkName?.trim().toLowerCase() === b.bunkName.toLowerCase() && !log.intervalHadPartialFills && log.mileageKmpl)
+                      .map((log) => (
+                        <div key={log.id} className="flex items-center justify-between text-[11px] tabular-nums">
+                          <span className="text-[#8E8E93]">{log.sourceBunkDate} · {log.distanceKm} km · {log.sourceFuelGrade}</span>
+                          <span className="text-[#F5F5F7] font-medium">{log.mileageKmpl} km/L</span>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </button>
             ))}
           </div>
         )}
@@ -145,6 +194,12 @@ export const FuelPage: React.FC<FuelPageProps> = ({ fuelLogs, onDeleteLog }) => 
                     {log.date} · {log.litres} L · ₹{log.totalCost.toLocaleString('en-IN')}
                     {log.distanceKm ? ` · +${log.distanceKm} km` : ''}
                   </p>
+                  {log.mileageKmpl && log.sourceBunkName && (
+                    <p className="text-[10px] text-[#636366] mt-1 truncate">
+                      Interval fuel: {log.sourceBunkName}
+                      {log.intervalHadPartialFills ? ' + partial top-ups (excluded from bunk ranking)' : ''}
+                    </p>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-3 shrink-0">
@@ -156,13 +211,22 @@ export const FuelPage: React.FC<FuelPageProps> = ({ fuelLogs, onDeleteLog }) => 
                       {log.mileageKmpl ? 'km/L' : log.isFullTank ? 'Baseline' : 'Pending'}
                     </p>
                   </div>
-                  <button
-                    onClick={() => onDeleteLog(log.id)}
-                    className="p-2 text-[#636366] hover:text-[#FF453A]"
-                    aria-label="Delete fuel log"
-                  >
-                    <TrashIcon className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center">
+                    <button
+                      onClick={() => onEditLog(log)}
+                      className="p-2 text-[#8E8E93] active:text-[#FF6600]"
+                      aria-label="Edit fuel log"
+                    >
+                      <EditIcon className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => onDeleteLog(log.id)}
+                      className="p-2 text-[#8E8E93] active:text-[#FF453A]"
+                      aria-label="Delete fuel log"
+                    >
+                      <TrashIcon className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}

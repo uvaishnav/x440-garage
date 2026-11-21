@@ -7,6 +7,8 @@ import {
   evaluateTaskHealth,
 } from '../lib/calculations';
 import { BikeIssue, FuelLog, MaintenanceTask, Trip } from '../types';
+import { AppSettings, ExpenseLog, MaintenanceLog, TimelineRide } from '../types';
+import { daysUntil } from '../lib/date';
 
 interface HomePageProps {
   currentOdometer: number;
@@ -14,6 +16,10 @@ interface HomePageProps {
   tasks: MaintenanceTask[];
   issues: BikeIssue[];
   activeTrip: Trip | null;
+  settings: AppSettings;
+  maintenanceLogs: MaintenanceLog[];
+  expenses: ExpenseLog[];
+  timelineRides: TimelineRide[];
   onNavigate: (tab: 'fuel' | 'trips' | 'care') => void;
   onQuickMarkTask: (task: MaintenanceTask) => void;
 }
@@ -24,6 +30,10 @@ export const HomePage: React.FC<HomePageProps> = ({
   tasks,
   issues,
   activeTrip,
+  settings,
+  maintenanceLogs,
+  expenses,
+  timelineRides,
   onNavigate,
   onQuickMarkTask,
 }) => {
@@ -32,6 +42,7 @@ export const HomePage: React.FC<HomePageProps> = ({
 
   const healthList = useMemo(() => {
     return tasks
+      .filter((task) => task.enabled !== false)
       .map((t) => evaluateTaskHealth(t, currentOdometer))
       .sort((a, b) => b.progressPercent - a.progressPercent);
   }, [tasks, currentOdometer]);
@@ -39,6 +50,21 @@ export const HomePage: React.FC<HomePageProps> = ({
   const overdueCount = healthList.filter((h) => h.status === 'overdue').length;
   const soonCount = healthList.filter((h) => h.status === 'soon').length;
   const openIssues = issues.filter((i) => i.status === 'open').length;
+  const insuranceDays = daysUntil(settings.insuranceExpiry);
+  const pucDays = daysUntil(settings.pucExpiry);
+  const reminderDays = settings.documentReminderDays ?? 30;
+  const documentAlerts = [
+    insuranceDays != null && insuranceDays <= reminderDays
+      ? { label: 'Insurance', days: insuranceDays }
+      : null,
+    pucDays != null && pucDays <= reminderDays ? { label: 'PUC', days: pucDays } : null,
+  ].filter((item): item is { label: string; days: number } => Boolean(item));
+  const careSpend = maintenanceLogs.reduce((sum, log) => sum + log.totalCost, 0);
+  const otherSpend = expenses.reduce((sum, expense) => sum + expense.amount, 0);
+  const ownershipSpend = summary.totalSpend + careSpend + otherSpend;
+  const trackedDistance = Math.max(0, currentOdometer - (settings.initialOdometer || 0));
+  const ownershipCostPerKm = trackedDistance > 0 ? ownershipSpend / trackedDistance : null;
+  const mappedDistance = timelineRides.reduce((sum, ride) => sum + ride.distanceKm, 0);
 
   return (
     <div className="space-y-5">
@@ -79,6 +105,13 @@ export const HomePage: React.FC<HomePageProps> = ({
             </div>
           </div>
           <ChevronRightIcon className="w-4 h-4 text-[#FF6600]" />
+        </button>
+      )}
+
+      {documentAlerts.length > 0 && (
+        <button onClick={() => onNavigate('care')} className="w-full rounded-xl bg-[#FFD60A]/10 border border-[#FFD60A]/25 px-4 py-3 text-left">
+          <p className="text-xs font-semibold text-[#FFD60A]">Document reminder</p>
+          <p className="text-[11px] text-[#F5F5F7] mt-0.5">{documentAlerts.map((item) => `${item.label} ${item.days < 0 ? `expired ${Math.abs(item.days)}d ago` : `due in ${item.days}d`}`).join(' · ')}</p>
         </button>
       )}
 
@@ -132,6 +165,18 @@ export const HomePage: React.FC<HomePageProps> = ({
           <p className="text-[11px] text-[#636366]">Fuel</p>
         </button>
       </div>
+
+      <section className="rounded-2xl bg-[#141518] border border-white/[0.08] px-4 py-3.5 flex items-center justify-between gap-4">
+        <div><p className="text-[10px] uppercase tracking-wider text-[#8E8E93]">Ownership spend</p><p className="text-xl font-semibold text-[#F5F5F7] tabular-nums mt-0.5">₹{Math.round(ownershipSpend).toLocaleString('en-IN')}</p></div>
+        <div className="text-right"><p className="text-[10px] uppercase tracking-wider text-[#8E8E93]">All-in cost / km</p><p className="text-xl font-semibold text-[#FF6600] tabular-nums mt-0.5">{ownershipCostPerKm ? `₹${ownershipCostPerKm.toFixed(2)}` : '—'}</p></div>
+      </section>
+
+      {timelineRides.length > 0 && (
+        <button onClick={() => onNavigate('trips')} className="w-full rounded-xl bg-[#141518] border border-white/[0.08] px-4 py-3 flex items-center justify-between text-left">
+          <span><span className="block text-xs font-semibold text-[#F5F5F7]">Mapped riding history</span><span className="block text-[11px] text-[#8E8E93] mt-0.5">{timelineRides.length} rides imported</span></span>
+          <span className="text-sm font-semibold text-[#FF6600] tabular-nums">{Math.round(mappedDistance).toLocaleString('en-IN')} km</span>
+        </button>
+      )}
 
       {/* Upcoming Care Checklist (Top 3) */}
       <section className="space-y-2.5">

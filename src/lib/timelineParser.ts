@@ -32,6 +32,31 @@ function classifyRoadSplit(distanceKm: number, durationMin: number, avgSpeedKmh:
   return { highwayPercent: 10, cityPercent: 90 };
 }
 
+function downsamplePoints(points: RoutePoint[], maximum = 500): RoutePoint[] {
+  if (points.length <= maximum) return points;
+  const sampled: RoutePoint[] = [];
+  for (let index = 0; index < maximum; index += 1) {
+    sampled.push(points[Math.round((index * (points.length - 1)) / (maximum - 1))]);
+  }
+  return sampled;
+}
+
+function annotateMotion(points: RoutePoint[], durationMin: number) {
+  let movingSeconds = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const from = points[index - 1];
+    const to = points[index];
+    if (!from.time || !to.time) continue;
+    const seconds = Math.max(0, (new Date(to.time).getTime() - new Date(from.time).getTime()) / 1000);
+    if (!seconds) continue;
+    const speed = (haversineKm(from, to) / seconds) * 3600;
+    to.speedKmh = Number(speed.toFixed(1));
+    if (speed > 3) movingSeconds += seconds;
+  }
+  const movingMin = movingSeconds > 0 ? Math.max(1, Math.round(movingSeconds / 60)) : durationMin;
+  return { movingMin, stoppedMin: Math.max(0, durationMin - movingMin) };
+}
+
 /**
  * Parses iPhone Google Maps exported `location-history.json` (on-device semanticSegments
  * or legacy timelineObjects). Automatically imports MOTORCYCLING segments only,
@@ -81,7 +106,13 @@ export function parseGoogleTimelineJson(
       for (const tp of seg.timelinePath) {
         if (tp.point) {
           const p = parseLatLngString(tp.point);
-          if (p) points.push(p);
+          if (p) {
+            const time = tp.time ||
+              (typeof tp.durationMinutesOffsetFromStartTime === 'number'
+                ? new Date(new Date(startTime).getTime() + tp.durationMinutesOffsetFromStartTime * 60000).toISOString()
+                : undefined);
+            points.push({ ...p, time });
+          }
         }
       }
     }
@@ -109,6 +140,7 @@ export function parseGoogleTimelineJson(
       Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000)
     );
     const avgSpeedKmh = Number(((distanceKm / durationMin) * 60).toFixed(1));
+    const { movingMin, stoppedMin } = annotateMotion(points, durationMin);
     const { highwayPercent, cityPercent } = classifyRoadSplit(
       distanceKm,
       durationMin,
@@ -122,11 +154,17 @@ export function parseGoogleTimelineJson(
       date: startTime.slice(0, 10),
       distanceKm: Number(distanceKm.toFixed(1)),
       durationMin,
+      movingMin,
+      stoppedMin,
       avgSpeedKmh,
       highwayPercent,
       cityPercent,
       activityType: type,
-      points: points.slice(0, 150), // Keep Firestore doc compact
+      points: downsamplePoints(points),
+      startName: activity.start?.name || activity.start?.address,
+      endName: activity.end?.name || activity.end?.address,
+      source: 'google-timeline',
+      classificationMethod: 'speed-estimate',
     });
   }
 
@@ -172,6 +210,7 @@ export function parseGoogleTimelineJson(
         Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000)
       );
       const avgSpeedKmh = Number(((distanceKm / durationMin) * 60).toFixed(1));
+      const { movingMin, stoppedMin } = annotateMotion(points, durationMin);
       const { highwayPercent, cityPercent } = classifyRoadSplit(
         distanceKm,
         durationMin,
@@ -185,11 +224,17 @@ export function parseGoogleTimelineJson(
         date: startTime.slice(0, 10),
         distanceKm: Number(distanceKm.toFixed(1)),
         durationMin,
+        movingMin,
+        stoppedMin,
         avgSpeedKmh,
         highwayPercent,
         cityPercent,
         activityType: type,
-        points: points.slice(0, 150),
+        points: downsamplePoints(points),
+        startName: seg.startLocation?.name || seg.startLocation?.address,
+        endName: seg.endLocation?.name || seg.endLocation?.address,
+        source: 'google-timeline',
+        classificationMethod: 'speed-estimate',
       });
     }
   }

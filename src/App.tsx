@@ -10,7 +10,7 @@ import { FuelPage } from './pages/FuelPage';
 import { TripsPage } from './pages/TripsPage';
 import { CarePage } from './pages/CarePage';
 import { evaluateTaskHealth } from './lib/calculations';
-import { MaintenanceTask } from './types';
+import { FuelLog, MaintenanceTask } from './types';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -19,6 +19,7 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState<TabKey>('home');
   const [fuelSheetOpen, setFuelSheetOpen] = useState(false);
+  const [editingFuelLog, setEditingFuelLog] = useState<FuelLog | null>(null);
   const [preselectedTask, setPreselectedTask] = useState<MaintenanceTask | null>(null);
 
   useEffect(() => {
@@ -29,6 +30,10 @@ export default function App() {
     });
     return unsub;
   }, []);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'auto' });
+  }, [activeTab]);
 
   const garage = useGarageData(user);
 
@@ -51,7 +56,7 @@ export default function App() {
   }
 
   const overdueCount = garage.tasks.filter(
-    (t) => evaluateTaskHealth(t, garage.currentOdometer).status === 'overdue'
+    (t) => t.enabled !== false && evaluateTaskHealth(t, garage.currentOdometer).status === 'overdue'
   ).length;
   const openIssueCount = garage.issues.filter((i) => i.status === 'open').length;
 
@@ -68,6 +73,10 @@ export default function App() {
             tasks={garage.tasks}
             issues={garage.issues}
             activeTrip={garage.activeTrip}
+            settings={garage.settings}
+            maintenanceLogs={garage.maintenanceLogs}
+            expenses={garage.expenses}
+            timelineRides={garage.timelineRides}
             onNavigate={(tab) => setActiveTab(tab)}
             onQuickMarkTask={(task) => {
               setPreselectedTask(task);
@@ -80,6 +89,10 @@ export default function App() {
           <FuelPage
             fuelLogs={garage.fuelLogs}
             onDeleteLog={garage.deleteFuelLog}
+            onEditLog={(log) => {
+              setEditingFuelLog(log);
+              setFuelSheetOpen(true);
+            }}
           />
         )}
 
@@ -92,7 +105,9 @@ export default function App() {
             timelineRides={garage.timelineRides}
             settings={garage.settings}
             onSaveTrip={garage.saveTrip}
+            onDeleteTrip={garage.deleteTrip}
             onImportTimeline={garage.saveTimelineRides}
+            onDeleteTimelineRide={garage.deleteTimelineRide}
           />
         )}
 
@@ -105,12 +120,20 @@ export default function App() {
             settings={garage.settings}
             fuelLogs={garage.fuelLogs}
             trips={garage.trips}
+            expenses={garage.expenses}
+            timelineRides={garage.timelineRides}
             preselectedTask={preselectedTask}
             onClearPreselectedTask={() => setPreselectedTask(null)}
             onCompleteTask={garage.completeMaintenanceTask}
+            onSaveTask={garage.saveMaintenanceTask}
+            onDeleteTask={garage.deleteMaintenanceTask}
+            onFlagRain={garage.flagRainRide}
             onSaveIssue={garage.saveIssue}
             onResolveIssue={garage.resolveIssue}
             onDeleteIssue={garage.deleteIssue}
+            onSaveExpense={garage.saveExpense}
+            onDeleteExpense={garage.deleteExpense}
+            onImportBackup={garage.importBackup}
             onSaveSettings={garage.saveSettings}
             onSignOut={auth && user ? () => signOut(auth!) : undefined}
           />
@@ -120,18 +143,25 @@ export default function App() {
       <BottomNav
         activeTab={activeTab}
         onChangeTab={setActiveTab}
-        onOpenFuelLog={() => setFuelSheetOpen(true)}
+        onOpenFuelLog={() => {
+          setEditingFuelLog(null);
+          setFuelSheetOpen(true);
+        }}
         alertCount={overdueCount + openIssueCount}
       />
 
       <FuelSheet
         open={fuelSheetOpen}
-        onClose={() => setFuelSheetOpen(false)}
+        onClose={() => {
+          setFuelSheetOpen(false);
+          setEditingFuelLog(null);
+        }}
         currentOdometer={garage.currentOdometer}
         settings={garage.settings}
         activeTrip={garage.activeTrip}
         recentLogs={garage.fuelLogs}
         onSave={garage.saveFuelLog}
+        editingLog={editingFuelLog}
       />
     </div>
   );

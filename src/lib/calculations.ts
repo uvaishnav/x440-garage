@@ -20,20 +20,25 @@ export function computeFuelMetrics(logs: FuelLog[]): ComputedFuelLog[] {
   });
 
   let lastFullOdo: number | null = null;
+  let lastFullLog: FuelLog | null = null;
   let pendingLitres = 0;
   let pendingCost = 0;
+  let partialFillCount = 0;
 
   const computed: ComputedFuelLog[] = sorted.map((log) => {
     if (!log.isFullTank) {
       pendingLitres += log.litres;
       pendingCost += log.totalCost;
+      partialFillCount += 1;
       return { ...log };
     }
 
     if (lastFullOdo === null) {
       lastFullOdo = log.odometer;
+      lastFullLog = log;
       pendingLitres = 0;
       pendingCost = 0;
+      partialFillCount = 0;
       return { ...log };
     }
 
@@ -41,9 +46,14 @@ export function computeFuelMetrics(logs: FuelLog[]): ComputedFuelLog[] {
     const totalLitresUsed = log.litres + pendingLitres;
     const totalSpent = log.totalCost + pendingCost;
 
+    const intervalSource = lastFullLog;
+    const intervalHadPartialFills = partialFillCount > 0;
+
     lastFullOdo = log.odometer;
+    lastFullLog = log;
     pendingLitres = 0;
     pendingCost = 0;
+    partialFillCount = 0;
 
     if (distanceKm > 0 && totalLitresUsed > 0) {
       return {
@@ -52,6 +62,11 @@ export function computeFuelMetrics(logs: FuelLog[]): ComputedFuelLog[] {
         accumulatedLitres: Number(totalLitresUsed.toFixed(2)),
         mileageKmpl: Number((distanceKm / totalLitresUsed).toFixed(2)),
         costPerKm: Number((totalSpent / distanceKm).toFixed(2)),
+        intervalHadPartialFills,
+        sourceBunkName: intervalSource?.bunkName,
+        sourceBunkLocation: intervalSource?.bunkLocation,
+        sourceBunkDate: intervalSource?.date,
+        sourceFuelGrade: intervalSource?.fuelGrade,
       };
     }
 
@@ -82,6 +97,11 @@ export function computeSummaryStats(computedLogs: ComputedFuelLog[]) {
     .reduce((sum, l) => sum + l.totalCost, 0);
 
   const totalSpend = computedLogs.reduce((sum, l) => sum + l.totalCost, 0);
+  const measuredDistance = valid.reduce((sum, l) => sum + (l.distanceKm || 0), 0);
+  const measuredCost = valid.reduce(
+    (sum, l) => sum + (l.costPerKm && l.distanceKm ? l.costPerKm * l.distanceKm : 0),
+    0
+  );
 
   return {
     overallMileage,
@@ -89,7 +109,45 @@ export function computeSummaryStats(computedLogs: ComputedFuelLog[]) {
     highwayMileage,
     monthlySpend: Math.round(monthlySpend),
     totalSpend: Math.round(totalSpend),
+    fuelCostPerKm:
+      measuredDistance > 0 ? Number((measuredCost / measuredDistance).toFixed(2)) : null,
   };
+}
+
+export function computeFuelGradeStats(computedLogs: ComputedFuelLog[]) {
+  const grades = new Map<
+    string,
+    { grade: string; distance: number; litres: number; samples: number }
+  >();
+
+  for (const log of computedLogs) {
+    if (
+      !log.sourceFuelGrade ||
+      !log.distanceKm ||
+      !log.accumulatedLitres ||
+      log.intervalHadPartialFills
+    ) {
+      continue;
+    }
+    const item = grades.get(log.sourceFuelGrade) || {
+      grade: log.sourceFuelGrade,
+      distance: 0,
+      litres: 0,
+      samples: 0,
+    };
+    item.distance += log.distanceKm;
+    item.litres += log.accumulatedLitres;
+    item.samples += 1;
+    grades.set(log.sourceFuelGrade, item);
+  }
+
+  return Array.from(grades.values())
+    .map((item) => ({
+      grade: item.grade,
+      avgMileage: Number((item.distance / item.litres).toFixed(1)),
+      samples: item.samples,
+    }))
+    .sort((a, b) => b.avgMileage - a.avgMileage);
 }
 
 /**
@@ -115,12 +173,24 @@ export function computeBunkLeaderboard(computedLogs: ComputedFuelLog[]): BunkSta
   >();
 
   for (const log of computedLogs) {
-    const key = log.bunkName.trim().toLowerCase();
+    // A full-to-full interval measures the fuel bought at the *opening* fill.
+    // Mixed partial-fill intervals cannot be attributed to one bunk honestly.
+    if (
+      !log.mileageKmpl ||
+      !log.distanceKm ||
+      !log.accumulatedLitres ||
+      log.intervalHadPartialFills ||
+      !log.sourceBunkName
+    ) {
+      continue;
+    }
+
+    const key = log.sourceBunkName.trim().toLowerCase();
     if (!key) continue;
 
     const existing = map.get(key) || {
-      bunkName: log.bunkName.trim(),
-      bunkLocation: log.bunkLocation,
+      bunkName: log.sourceBunkName.trim(),
+      bunkLocation: log.sourceBunkLocation,
       dist: 0,
       lit: 0,
       cityDist: 0,
@@ -129,30 +199,30 @@ export function computeBunkLeaderboard(computedLogs: ComputedFuelLog[]): BunkSta
       hwyLit: 0,
       fullFillCount: 0,
       totalLitres: 0,
-      lastVisit: log.date,
+      lastVisit: log.sourceBunkDate || log.date,
     };
 
-    existing.totalLitres += log.litres;
-    if (log.date > existing.lastVisit) existing.lastVisit = log.date;
+    existing.totalLitres += log.accumulatedLitres;
+    if ((log.sourceBunkDate || log.date) > existing.lastVisit) {
+      existing.lastVisit = log.sourceBunkDate || log.date;
+    }
 
-    if (log.mileageKmpl && log.distanceKm && log.accumulatedLitres) {
-      existing.fullFillCount += 1;
-      existing.dist += log.distanceKm;
-      existing.lit += log.accumulatedLitres;
-      if (log.rideMix === 'City') {
-        existing.cityDist += log.distanceKm;
-        existing.cityLit += log.accumulatedLitres;
-      } else if (log.rideMix === 'Highway') {
-        existing.hwyDist += log.distanceKm;
-        existing.hwyLit += log.accumulatedLitres;
-      }
+    existing.fullFillCount += 1;
+    existing.dist += log.distanceKm;
+    existing.lit += log.accumulatedLitres;
+    if (log.rideMix === 'City') {
+      existing.cityDist += log.distanceKm;
+      existing.cityLit += log.accumulatedLitres;
+    } else if (log.rideMix === 'Highway') {
+      existing.hwyDist += log.distanceKm;
+      existing.hwyLit += log.accumulatedLitres;
     }
 
     map.set(key, existing);
   }
 
   return Array.from(map.values())
-    .filter((b) => b.lit > 0)
+    .filter((b) => b.lit > 0 && b.fullFillCount >= 2)
     .map((b) => ({
       bunkName: b.bunkName,
       bunkLocation: b.bunkLocation,
@@ -163,13 +233,7 @@ export function computeBunkLeaderboard(computedLogs: ComputedFuelLog[]): BunkSta
       totalLitres: Number(b.totalLitres.toFixed(1)),
       lastVisit: b.lastVisit,
     }))
-    .sort((a, b) => {
-      // Prioritize bunks with >= 2 full fills first, then highest avgMileage
-      const aQualified = a.fullFillCount >= 2 ? 1 : 0;
-      const bQualified = b.fullFillCount >= 2 ? 1 : 0;
-      if (aQualified !== bQualified) return bQualified - aQualified;
-      return b.avgMileage - a.avgMileage;
-    });
+    .sort((a, b) => b.avgMileage - a.avgMileage);
 }
 
 export interface TaskHealth {
@@ -186,6 +250,16 @@ export function evaluateTaskHealth(
 ): TaskHealth {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+
+  if (task.dueNowReason) {
+    return {
+      task,
+      status: 'overdue',
+      remainingKm: 0,
+      remainingDays: 0,
+      progressPercent: 100,
+    };
+  }
 
   let remainingKm: number | null = null;
   let kmProgress = 0;

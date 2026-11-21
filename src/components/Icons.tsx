@@ -109,3 +109,10 @@ export const TrashIcon: React.FC<IconProps> = ({ className = 'w-4 h-4' }) => (
     <path d="M6.5 7l1 12.2a1.5 1.5 0 0 0 1.5 1.3h6a1.5 1.5 0 0 0 1.5-1.3l1-12.2" />
   </svg>
 );
+
+export const EditIcon: React.FC<IconProps> = ({ className = 'w-4 h-4' }) => (
+  <svg viewBox="0 0 24 24" fill="none" className={className} stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 20h4l10.8-10.8a2.1 2.1 0 0 0-4-4L4 16v4Z" />
+    <path d="m13.8 6.2 4 4" />
+  </svg>
+);
