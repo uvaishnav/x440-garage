@@ -99,6 +99,7 @@ export interface MaintenanceTask {
   description: string;
   enabled?: boolean;
   isCustom?: boolean;
+  templateVersion?: number;
   manualReference?: string;
   dueNowReason?: string;
   lastDoneOdometer: number | null;

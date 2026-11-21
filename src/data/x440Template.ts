@@ -1,5 +1,7 @@
 import { AppSettings, BikeZone, MaintenanceTask } from '../types';
 
+export const X440_MAINTENANCE_TEMPLATE_VERSION = 4;
+
 export const DEFAULT_SETTINGS: AppSettings = {
   bikeName: 'Harley-Davidson X440 Matte Denim',
   initialOdometer: 0,
@@ -13,7 +15,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   includeAmbiguousDriving: false,
   nextServiceOdometer: 0,
   documentReminderDays: 30,
-  maintenanceTemplateVersion: 3,
+  maintenanceTemplateVersion: X440_MAINTENANCE_TEMPLATE_VERSION,
 };
 
 export const X440_QUICK_SPECS = [
@@ -52,7 +54,7 @@ export const BIKE_HOTSPOTS: Record<
   controls: { label: 'Controls & Cables', xPercent: 67, yPercent: 28 },
 };
 
-export const X440_MAINTENANCE_TEMPLATE: MaintenanceTask[] = [
+export const X440_MAINTENANCE_TEMPLATE: MaintenanceTask[] = ([
   {
     id: 'tyre-pressure',
     title: 'Tyre Pressure & Tread Check',
@@ -240,7 +242,10 @@ export const X440_MAINTENANCE_TEMPLATE: MaintenanceTask[] = [
     lastDoneOdometer: null,
     lastDoneDate: null,
   },
-];
+] as MaintenanceTask[]).map((task) => ({
+  ...task,
+  templateVersion: X440_MAINTENANCE_TEMPLATE_VERSION,
+}));
 
 export const X440_SYMPTOM_SUGGESTIONS: Record<string, string[]> = {
   'Vibrations / Buzzing': [

@@ -7,6 +7,7 @@ import {
   setDoc,
   updateDoc,
   writeBatch,
+  FirestoreError,
 } from 'firebase/firestore';
 import { User } from 'firebase/auth';
 import { db, isFirebaseConfigured } from '../lib/firebase';
@@ -21,7 +22,11 @@ import {
   TimelineRide,
   Trip,
 } from '../types';
-import { DEFAULT_SETTINGS, X440_MAINTENANCE_TEMPLATE } from '../data/x440Template';
+import {
+  DEFAULT_SETTINGS,
+  X440_MAINTENANCE_TEMPLATE,
+  X440_MAINTENANCE_TEMPLATE_VERSION,
+} from '../data/x440Template';
 import { withoutUndefined } from '../lib/firestoreData';
 import { localDateInputValue } from '../lib/date';
 
@@ -42,16 +47,22 @@ function mergeMaintenanceTemplate(saved: MaintenanceTask[]): MaintenanceTask[] {
   const savedMap = new Map(saved.map((task) => [task.id, task]));
   const defaults = X440_MAINTENANCE_TEMPLATE.map((template) => {
     const existing = savedMap.get(template.id);
-    return existing
-      ? {
+    if (!existing) return { ...template, enabled: true };
+
+    const needsReferenceMigration =
+      (existing.templateVersion ?? 0) < X440_MAINTENANCE_TEMPLATE_VERSION;
+    if (needsReferenceMigration) {
+      return {
           ...template,
-          ...existing,
-          title: template.title,
-          category: template.category,
-          zone: template.zone,
-          description: existing.isCustom ? existing.description : template.description,
-        }
-      : { ...template, enabled: true };
+          enabled: existing.enabled ?? true,
+          lastDoneOdometer: existing.lastDoneOdometer,
+          lastDoneDate: existing.lastDoneDate,
+          dueNowReason: existing.dueNowReason,
+        };
+    }
+
+    // Once migrated, the rider's edits to a standard task are intentional.
+    return { ...template, ...existing };
   });
   const custom = saved.filter(
     (task) => task.isCustom || !X440_MAINTENANCE_TEMPLATE.some((item) => item.id === task.id)
@@ -74,7 +85,11 @@ function loadLocalState(): GarageState {
         issues: parsed.issues || [],
         timelineRides: parsed.timelineRides || [],
         expenses: parsed.expenses || [],
-        settings: { ...DEFAULT_SETTINGS, ...(parsed.settings || {}) },
+        settings: {
+          ...DEFAULT_SETTINGS,
+          ...(parsed.settings || {}),
+          maintenanceTemplateVersion: X440_MAINTENANCE_TEMPLATE_VERSION,
+        },
       };
     }
   } catch {
@@ -102,6 +117,7 @@ export function useGarageData(user: User | null) {
   const [expenses, setExpenses] = useState<ExpenseLog[]>([]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
+  const [dataError, setDataError] = useState<string | null>(null);
 
   const isCloud = Boolean(isFirebaseConfigured && db && user);
 
@@ -146,55 +162,82 @@ export function useGarageData(user: User | null) {
       setTimelineRides(local.timelineRides);
       setExpenses(local.expenses);
       setSettings(local.settings);
+      setDataError(null);
       setLoading(false);
       return;
     }
 
+    setLoading(true);
+    setDataError(null);
     const uid = user.uid;
     const firestore = db;
     const unsubs: (() => void)[] = [];
+    const handleSnapshotError = (error: FirestoreError | Error) => {
+      const code = 'code' in error ? String(error.code) : '';
+      setDataError(
+        code.includes('permission-denied')
+          ? 'Cloud access was denied. Publish the included Firestore rules and sign in again.'
+          : 'Cloud data could not be loaded. Cached data remains available; Firebase will retry automatically.'
+      );
+      setLoading(false);
+    };
 
     unsubs.push(
-      onSnapshot(collection(firestore, 'users', uid, 'fuelLogs'), (snap) => {
-        setFuelLogs(
-          snap.docs
-            .map((d) => ({ id: d.id, ...(d.data() as Omit<FuelLog, 'id'>) }))
-            .sort((a, b) => b.createdAt - a.createdAt)
-        );
-      })
+      onSnapshot(
+        collection(firestore, 'users', uid, 'fuelLogs'),
+        (snap) => {
+          setFuelLogs(
+            snap.docs
+              .map((d) => ({ id: d.id, ...(d.data() as Omit<FuelLog, 'id'>) }))
+              .sort((a, b) => b.createdAt - a.createdAt)
+          );
+        },
+        handleSnapshotError
+      )
     );
 
     unsubs.push(
-      onSnapshot(collection(firestore, 'users', uid, 'trips'), (snap) => {
-        const list = snap.docs
-          .map((d) => ({ id: d.id, ...(d.data() as Omit<Trip, 'id'>) }))
-          .sort((a, b) => b.createdAt - a.createdAt);
-        setTrips(list);
-      })
+      onSnapshot(
+        collection(firestore, 'users', uid, 'trips'),
+        (snap) => {
+          const list = snap.docs
+            .map((d) => ({ id: d.id, ...(d.data() as Omit<Trip, 'id'>) }))
+            .sort((a, b) => b.createdAt - a.createdAt);
+          setTrips(list);
+        },
+        handleSnapshotError
+      )
     );
 
     unsubs.push(
-      onSnapshot(collection(firestore, 'users', uid, 'maintenanceTasks'), async (snap) => {
-        if (snap.empty) {
-          // Auto-seed Harley-Davidson X440 manual template on first login
-          const batch = writeBatch(firestore);
-          for (const t of X440_MAINTENANCE_TEMPLATE) {
-            batch.set(doc(firestore, 'users', uid, 'maintenanceTasks', t.id), t);
-          }
-          await batch.commit();
-        } else {
-          const saved = snap.docs.map((d) => ({
-            id: d.id,
-            ...(d.data() as Omit<MaintenanceTask, 'id'>),
-          }));
-          const list = mergeMaintenanceTemplate(saved);
-          setTasks(list);
+      onSnapshot(
+        collection(firestore, 'users', uid, 'maintenanceTasks'),
+        async (snap) => {
+          try {
+            if (snap.empty) {
+              // Auto-seed Harley-Davidson X440 manual template on first login
+              const batch = writeBatch(firestore);
+              for (const t of X440_MAINTENANCE_TEMPLATE) {
+                batch.set(doc(firestore, 'users', uid, 'maintenanceTasks', t.id), t);
+              }
+              await batch.commit();
+              return;
+            }
+            const saved = snap.docs.map((d) => ({
+              id: d.id,
+              ...(d.data() as Omit<MaintenanceTask, 'id'>),
+            }));
+            const list = mergeMaintenanceTemplate(saved);
+            setTasks(list);
 
-          const needsTemplateSync = X440_MAINTENANCE_TEMPLATE.some((template) => {
-            const existing = saved.find((task) => task.id === template.id);
-            return !existing || existing.title !== template.title;
-          });
-          if (needsTemplateSync) {
+            const needsTemplateSync = X440_MAINTENANCE_TEMPLATE.some((template) => {
+              const existing = saved.find((task) => task.id === template.id);
+              return (
+                !existing ||
+                (existing.templateVersion ?? 0) < X440_MAINTENANCE_TEMPLATE_VERSION
+              );
+            });
+            if (!needsTemplateSync) return;
             const batch = writeBatch(firestore);
             for (const task of list) {
               batch.set(
@@ -203,56 +246,83 @@ export function useGarageData(user: User | null) {
               );
             }
             await batch.commit();
+          } catch (error) {
+            handleSnapshotError(error as Error);
           }
-        }
-      })
+        },
+        handleSnapshotError
+      )
     );
 
     unsubs.push(
-      onSnapshot(collection(firestore, 'users', uid, 'maintenanceLogs'), (snap) => {
-        const list = snap.docs
-          .map((d) => ({ id: d.id, ...(d.data() as Omit<MaintenanceLog, 'id'>) }))
-          .sort((a, b) => b.createdAt - a.createdAt);
-        setMaintenanceLogs(list);
-      })
+      onSnapshot(
+        collection(firestore, 'users', uid, 'maintenanceLogs'),
+        (snap) => {
+          const list = snap.docs
+            .map((d) => ({ id: d.id, ...(d.data() as Omit<MaintenanceLog, 'id'>) }))
+            .sort((a, b) => b.createdAt - a.createdAt);
+          setMaintenanceLogs(list);
+        },
+        handleSnapshotError
+      )
     );
 
     unsubs.push(
-      onSnapshot(collection(firestore, 'users', uid, 'issues'), (snap) => {
-        const list = snap.docs
-          .map((d) => ({ id: d.id, ...(d.data() as Omit<BikeIssue, 'id'>) }))
-          .sort((a, b) => b.createdAt - a.createdAt);
-        setIssues(list);
-      })
+      onSnapshot(
+        collection(firestore, 'users', uid, 'issues'),
+        (snap) => {
+          const list = snap.docs
+            .map((d) => ({ id: d.id, ...(d.data() as Omit<BikeIssue, 'id'>) }))
+            .sort((a, b) => b.createdAt - a.createdAt);
+          setIssues(list);
+        },
+        handleSnapshotError
+      )
     );
 
     unsubs.push(
-      onSnapshot(collection(firestore, 'users', uid, 'timelineRides'), (snap) => {
-        const list = snap.docs
-          .map((d) => ({ id: d.id, ...(d.data() as Omit<TimelineRide, 'id'>) }))
-          .sort((a, b) => b.startTime.localeCompare(a.startTime));
-        setTimelineRides(list);
-      })
+      onSnapshot(
+        collection(firestore, 'users', uid, 'timelineRides'),
+        (snap) => {
+          const list = snap.docs
+            .map((d) => ({ id: d.id, ...(d.data() as Omit<TimelineRide, 'id'>) }))
+            .sort((a, b) => b.startTime.localeCompare(a.startTime));
+          setTimelineRides(list);
+        },
+        handleSnapshotError
+      )
     );
 
     unsubs.push(
-      onSnapshot(collection(firestore, 'users', uid, 'expenses'), (snap) => {
-        const list = snap.docs
-          .map((d) => ({ id: d.id, ...(d.data() as Omit<ExpenseLog, 'id'>) }))
-          .sort((a, b) => b.createdAt - a.createdAt);
-        setExpenses(list);
-      })
+      onSnapshot(
+        collection(firestore, 'users', uid, 'expenses'),
+        (snap) => {
+          const list = snap.docs
+            .map((d) => ({ id: d.id, ...(d.data() as Omit<ExpenseLog, 'id'>) }))
+            .sort((a, b) => b.createdAt - a.createdAt);
+          setExpenses(list);
+        },
+        handleSnapshotError
+      )
     );
 
     unsubs.push(
-      onSnapshot(doc(firestore, 'users', uid, 'meta', 'settings'), (snap) => {
-        if (snap.exists()) {
-          setSettings({ ...DEFAULT_SETTINGS, ...(snap.data() as Partial<AppSettings>) });
-        } else {
-          setSettings(DEFAULT_SETTINGS);
-        }
-        setLoading(false);
-      })
+      onSnapshot(
+        doc(firestore, 'users', uid, 'meta', 'settings'),
+        (snap) => {
+          if (snap.exists()) {
+            setSettings({
+              ...DEFAULT_SETTINGS,
+              ...(snap.data() as Partial<AppSettings>),
+              maintenanceTemplateVersion: X440_MAINTENANCE_TEMPLATE_VERSION,
+            });
+          } else {
+            setSettings(DEFAULT_SETTINGS);
+          }
+          setLoading(false);
+        },
+        handleSnapshotError
+      )
     );
 
     return () => unsubs.forEach((u) => u());
@@ -483,7 +553,13 @@ export function useGarageData(user: User | null) {
     if (backup.issues) setIssues(backup.issues);
     if (backup.timelineRides) setTimelineRides(backup.timelineRides);
     if (backup.expenses) setExpenses(backup.expenses);
-    if (backup.settings) setSettings({ ...DEFAULT_SETTINGS, ...backup.settings });
+    if (backup.settings) {
+      setSettings({
+        ...DEFAULT_SETTINGS,
+        ...backup.settings,
+        maintenanceTemplateVersion: X440_MAINTENANCE_TEMPLATE_VERSION,
+      });
+    }
   };
 
   const saveExpense = async (expense: ExpenseLog) => {
@@ -507,6 +583,7 @@ export function useGarageData(user: User | null) {
 
   return {
     loading,
+    dataError,
     isCloud,
     currentOdometer,
     activeTrip,

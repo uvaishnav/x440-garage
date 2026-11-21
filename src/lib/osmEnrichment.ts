@@ -1,5 +1,15 @@
 import { TimelineRide } from '../types';
 
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 async function classifyRoads(ride: TimelineRide): Promise<Pick<TimelineRide, 'highwayPercent' | 'cityPercent' | 'classificationMethod'>> {
   if (ride.points.length < 2) {
     return {
@@ -16,7 +26,7 @@ async function classifyRoads(ride: TimelineRide): Promise<Pick<TimelineRide, 'hi
     .map((point) => `way(around:45,${point.lat},${point.lng})["highway"];`)
     .join('')});out tags;`;
   try {
-    const response = await fetch('https://overpass-api.de/api/interpreter', {
+    const response = await fetchWithTimeout('https://overpass-api.de/api/interpreter', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: `data=${encodeURIComponent(query)}`,
@@ -46,7 +56,7 @@ async function reverseName(lat: number, lng: number): Promise<string | undefined
   url.searchParams.set('lat', String(lat));
   url.searchParams.set('lon', String(lng));
   url.searchParams.set('zoom', '12');
-  const response = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
+  const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 10000);
   if (!response.ok) return undefined;
   const data = await response.json();
   const address = data.address || {};

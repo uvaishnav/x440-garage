@@ -47,12 +47,26 @@ export default function App() {
     );
   }
 
-  if (isFirebaseConfigured && !user) {
+  if (isFirebaseConfigured && !user && !localPreview) {
     return <AuthScreen onContinueLocal={() => setLocalPreview(true)} />;
   }
 
   if (!isFirebaseConfigured && !localPreview) {
     return <AuthScreen onContinueLocal={() => setLocalPreview(true)} />;
+  }
+
+  if (garage.loading) {
+    return (
+      <div className="min-h-screen bg-[#0A0A0B] flex flex-col items-center justify-center gap-4 px-8 text-center">
+        <div className="w-16 h-16 rounded-2xl overflow-hidden border border-white/10 animate-pulse">
+          <img src="/assets/icon-192.png" alt="" className="w-full h-full" />
+        </div>
+        <div>
+          <p className="text-sm font-semibold text-[#F5F5F7]">Loading your garage</p>
+          <p className="text-xs text-[#8E8E93] mt-1">Syncing fuel, trips and service records…</p>
+        </div>
+      </div>
+    );
   }
 
   const overdueCount = garage.tasks.filter(
@@ -66,6 +80,11 @@ export default function App() {
       <div className="status-bar-scrim" />
 
       <main className="max-w-lg mx-auto px-4 pb-28 safe-top">
+        {garage.dataError && (
+          <div role="alert" className="mb-4 rounded-xl border border-[#FF453A]/30 bg-[#FF453A]/10 px-4 py-3 text-xs leading-relaxed text-[#FFAAA5]">
+            {garage.dataError}
+          </div>
+        )}
         {activeTab === 'home' && (
           <HomePage
             currentOdometer={garage.currentOdometer}
