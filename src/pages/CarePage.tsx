@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BikeAnatomyMap } from '../components/BikeAnatomyMap';
 import { BillReceiptCard } from '../components/BillReceiptCard';
 import { BillReceiptEditor } from '../components/BillReceiptEditor';
-import { AlertPulseIcon, CheckIcon, CloseIcon, PlusIcon, TrashIcon } from '../components/Icons';
+import { AlertPulseIcon, CareIcon, CheckIcon, CloseIcon, PlusIcon, TrashIcon } from '../components/Icons';
+import { BIKE_EVENT_TEMPLATES } from '../data/bikeEventTemplates';
 import {
   X440_QUICK_SPECS,
   X440_SYMPTOM_SUGGESTIONS,
@@ -11,6 +12,7 @@ import { evaluateTaskHealth, sumBillEntries } from '../lib/calculations';
 import { localDateInputValue } from '../lib/date';
 import {
   AppSettings,
+  BikeEvent,
   BikeIssue,
   BikeZone,
   BillEntry,
@@ -36,6 +38,7 @@ interface CarePageProps {
   fuelLogs: FuelLog[];
   trips: Trip[];
   expenses: ExpenseLog[];
+  bikeEvents: BikeEvent[];
   timelineRides: TimelineRide[];
   preselectedTask: MaintenanceTask | null;
   onClearPreselectedTask: () => void;
@@ -48,6 +51,8 @@ interface CarePageProps {
   onDeleteIssue: (id: string) => Promise<void>;
   onSaveExpense: (expense: ExpenseLog) => Promise<void>;
   onDeleteExpense: (id: string) => Promise<void>;
+  onSaveBikeEvent: (event: BikeEvent) => Promise<void>;
+  onDeleteBikeEvent: (event: BikeEvent) => Promise<void>;
   onImportBackup: (backup: GarageBackup) => Promise<void>;
   onSaveSettings: (next: AppSettings) => Promise<void>;
   onSignOut?: () => void;
@@ -62,6 +67,7 @@ export const CarePage: React.FC<CarePageProps> = ({
   fuelLogs,
   trips,
   expenses,
+  bikeEvents,
   timelineRides,
   preselectedTask,
   onClearPreselectedTask,
@@ -74,6 +80,8 @@ export const CarePage: React.FC<CarePageProps> = ({
   onDeleteIssue,
   onSaveExpense,
   onDeleteExpense,
+  onSaveBikeEvent,
+  onDeleteBikeEvent,
   onImportBackup,
   onSaveSettings,
   onSignOut,
@@ -118,6 +126,19 @@ export const CarePage: React.FC<CarePageProps> = ({
   const [expenseDate, setExpenseDate] = useState(localDateInputValue());
   const [expenseNotes, setExpenseNotes] = useState('');
 
+  // Bike event logger state
+  const [showEventForm, setShowEventForm] = useState(false);
+  const [eventTemplateId, setEventTemplateId] = useState('periodic-service');
+  const [eventCustomTitle, setEventCustomTitle] = useState('');
+  const [eventDate, setEventDate] = useState(localDateInputValue());
+  const [eventOdometer, setEventOdometer] = useState(String(currentOdometer || ''));
+  const [eventWorkshop, setEventWorkshop] = useState('');
+  const [eventNotes, setEventNotes] = useState('');
+  const [eventBillEntries, setEventBillEntries] = useState<BillEntry[]>([]);
+  const [eventTaskIds, setEventTaskIds] = useState<string[]>([]);
+  const [eventSaving, setEventSaving] = useState(false);
+  const [eventError, setEventError] = useState('');
+
   // Local settings draft
   const [draftSettings, setDraftSettings] = useState<AppSettings>(settings);
   const [savedToast, setSavedToast] = useState(false);
@@ -157,6 +178,78 @@ export const CarePage: React.FC<CarePageProps> = ({
   const visibleHealth = selectedZone
     ? healthList.filter((h) => h.task.zone === selectedZone)
     : healthList;
+
+  const selectEventTemplate = (templateId: string) => {
+    const template = BIKE_EVENT_TEMPLATES.find((item) => item.id === templateId);
+    if (!template) return;
+    setEventTemplateId(templateId);
+    setEventCustomTitle('');
+    setEventTaskIds(
+      template.selectDueTasks
+        ? healthList
+            .filter(
+              (health) =>
+                health.status === 'overdue' ||
+                (health.status === 'soon' &&
+                  (health.remainingKm !== null || health.remainingDays !== null))
+            )
+            .map((health) => health.task.id)
+        : template.taskIds.filter((id) => tasks.some((task) => task.id === id))
+    );
+  };
+
+  const openEventLogger = () => {
+    selectEventTemplate('periodic-service');
+    setEventDate(localDateInputValue());
+    setEventOdometer(String(currentOdometer || ''));
+    setEventWorkshop('');
+    setEventNotes('');
+    setEventBillEntries([]);
+    setEventError('');
+    setShowEventForm(true);
+  };
+
+  const handleSaveBikeEvent = async (submitEvent: React.FormEvent) => {
+    submitEvent.preventDefault();
+    const template = BIKE_EVENT_TEMPLATES.find((item) => item.id === eventTemplateId);
+    if (!template) return;
+    const title = eventTemplateId === 'one-time' ? eventCustomTitle.trim() : template.label;
+    const odometer = parseFloat(eventOdometer) || 0;
+    if (!title || odometer <= 0) {
+      setEventError('Add an event name and a valid odometer reading.');
+      return;
+    }
+
+    const cleanedEntries = eventBillEntries.filter(
+      (entry) => entry.key.trim() !== '' || entry.value.trim() !== ''
+    );
+    const event: BikeEvent = {
+      id: `event-${Date.now()}`,
+      templateId: template.id,
+      kind: template.kind,
+      title,
+      date: eventDate,
+      odometer,
+      workshop: eventWorkshop.trim() || undefined,
+      notes: eventNotes.trim() || undefined,
+      completedTaskIds: eventTaskIds,
+      billEntries: cleanedEntries,
+      totalCost: sumBillEntries(cleanedEntries),
+      createdAt: Date.now(),
+    };
+
+    setEventSaving(true);
+    setEventError('');
+    try {
+      await onSaveBikeEvent(event);
+      setShowEventForm(false);
+      setSection('service');
+    } catch (error) {
+      setEventError(error instanceof Error ? error.message : 'Could not save this bike event.');
+    } finally {
+      setEventSaving(false);
+    }
+  };
 
   const handleSaveMaintenance = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -296,6 +389,7 @@ export const CarePage: React.FC<CarePageProps> = ({
       issues,
       timelineRides,
       expenses,
+      bikeEvents,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: 'application/json',
@@ -324,6 +418,7 @@ export const CarePage: React.FC<CarePageProps> = ({
     fuelLogs.forEach((log) => rows.push(['fuel', log.date, log.odometer, `${log.fuelGrade} · ${log.bunkName}`, log.totalCost, `${log.litres} L · ${log.rideMix} · ${log.isFullTank ? 'full' : 'partial'}`]));
     trips.forEach((trip) => rows.push(['trip', trip.startDate, trip.startOdometer, trip.name, '', `${trip.status} · expected ${trip.expectedKm} km · end ${trip.endOdometer || ''}`]));
     maintenanceLogs.forEach((log) => rows.push(['maintenance', log.date, log.odometer, log.taskTitle, log.totalCost, log.notes || '']));
+    bikeEvents.forEach((event) => rows.push(['bike_event', event.date, event.odometer, event.title, event.totalCost, `${event.kind} · ${event.workshop || ''} · ${event.notes || ''}`]));
     issues.forEach((issue) => rows.push(['issue', issue.date, issue.odometer, issue.title, '', `${issue.severity} · ${issue.status} · ${issue.notes || ''}`]));
     expenses.forEach((expense) => rows.push(['expense', expense.date, expense.odometer || '', expense.title, expense.amount, `${expense.category} · ${expense.notes || ''}`]));
     downloadText(
@@ -359,8 +454,13 @@ export const CarePage: React.FC<CarePageProps> = ({
     (health.remainingKm != null && health.remainingKm <= serviceOdometer - currentOdometer) ||
     (health.remainingDays != null && health.remainingDays <= 30)
   );
-  const serviceTotal = maintenanceLogs.reduce((sum, log) => sum + log.totalCost, 0);
+  const serviceTotal =
+    maintenanceLogs.reduce((sum, log) => sum + log.totalCost, 0) +
+    bikeEvents.reduce((sum, event) => sum + event.totalCost, 0);
   const otherExpenseTotal = expenses.reduce((sum, expense) => sum + expense.amount, 0);
+  const selectedEventTemplate =
+    BIKE_EVENT_TEMPLATES.find((template) => template.id === eventTemplateId) ||
+    BIKE_EVENT_TEMPLATES[0];
 
   const shareServiceHandover = async () => {
     const lines = [
@@ -392,6 +492,24 @@ export const CarePage: React.FC<CarePageProps> = ({
           Care & Service
         </h1>
       </header>
+
+      <button
+        onClick={openEventLogger}
+        className="w-full min-h-14 rounded-2xl bg-[#FF6600] px-4 py-3 flex items-center justify-between gap-4 text-left text-white active:scale-[0.99] transition-transform"
+      >
+        <span className="flex items-center gap-3 min-w-0">
+          <span className="w-9 h-9 rounded-xl bg-black/15 flex items-center justify-center shrink-0">
+            <CareIcon className="w-5 h-5" />
+          </span>
+          <span className="min-w-0">
+            <span className="block text-sm font-semibold">Log Bike Event</span>
+            <span className="block text-[11px] text-white/80 truncate">
+              Service, repair, adjustment or a one-time event
+            </span>
+          </span>
+        </span>
+        <PlusIcon className="w-5 h-5 shrink-0" />
+      </button>
 
       {/* iOS Segmented Control */}
       <div className="grid grid-cols-4 gap-1 p-1 rounded-2xl bg-[#141518] border border-white/[0.08]">
@@ -642,6 +760,82 @@ export const CarePage: React.FC<CarePageProps> = ({
           {openIssues.length > 0 && <section className="space-y-2"><h2 className="text-sm font-semibold text-[#F5F5F7] px-1">Open issues</h2>{openIssues.map((issue) => <div key={issue.id} className="rounded-xl bg-[#141518] border border-white/[0.08] px-4 py-3"><div className="flex justify-between gap-3"><p className="text-sm text-[#F5F5F7]">{issue.title}</p><span className="text-[10px] text-[#FFD60A]">{issue.severity}</span></div><p className="text-[11px] text-[#8E8E93] mt-0.5">{issue.notes || issue.symptomCategory}</p></div>)}</section>}
 
           <section className="space-y-2.5">
+            <div className="flex items-center justify-between gap-3 px-1">
+              <div>
+                <h2 className="text-sm font-semibold text-[#F5F5F7]">Bike Event History</h2>
+                <p className="text-[11px] text-[#8E8E93]">Events appear beside relevant mileage intervals.</p>
+              </div>
+              <button onClick={openEventLogger} className="h-9 px-3 rounded-xl bg-[#FF6600] text-white text-xs font-semibold shrink-0">Log Event</button>
+            </div>
+            {bikeEvents.length === 0 ? (
+              <div className="rounded-xl bg-[#141518] border border-white/[0.08] px-4 py-5 text-center">
+                <p className="text-xs text-[#A7A7AD]">No service or bike events logged yet.</p>
+              </div>
+            ) : (
+              bikeEvents.map((event) => {
+                const completedNames = tasks
+                  .filter((task) => event.completedTaskIds.includes(task.id))
+                  .map((task) => task.title);
+                return (
+                  <article key={event.id} className="rounded-2xl bg-[#141518] border border-white/[0.08] p-4 space-y-2.5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-[#F5F5F7] break-words">{event.title}</p>
+                        <p className="text-[11px] text-[#A7A7AD] tabular-nums mt-0.5">
+                          {event.kind} · {event.date} @ {event.odometer.toLocaleString('en-IN')} km
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {event.totalCost > 0 && <span className="text-sm font-semibold text-[#F5F5F7] tabular-nums">₹{event.totalCost.toLocaleString('en-IN')}</span>}
+                        <button
+                          onClick={() => {
+                            if (window.confirm(`Delete “${event.title}”? Linked checklist completions will also be removed.`)) {
+                              void onDeleteBikeEvent(event);
+                            }
+                          }}
+                          className="w-9 h-9 flex items-center justify-center text-[#A7A7AD] active:text-[#FF453A]"
+                          aria-label={`Delete ${event.title}`}
+                        >
+                          <TrashIcon />
+                        </button>
+                      </div>
+                    </div>
+                    {event.workshop && <p className="text-xs text-[#D1D1D6]">Workshop: {event.workshop}</p>}
+                    {event.notes && <p className="text-xs text-[#A7A7AD] leading-relaxed break-words">{event.notes}</p>}
+                    {completedNames.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {completedNames.map((name) => (
+                          <span key={name} className="px-2 py-1 rounded-lg bg-[#1F2126] text-[10px] text-[#C7C7CC]">{name}</span>
+                        ))}
+                      </div>
+                    )}
+                    {event.billEntries.length > 0 && (
+                      <div className="rounded-xl bg-[#0F1013] border border-white/[0.06] px-3.5 py-2 divide-y divide-white/[0.05]">
+                        {event.billEntries.map((entry, index) => {
+                          const numericValue = entry.value.trim().replace(/[₹,\s]/g, '');
+                          const looksLikeCost =
+                            /^\d+(\.\d+)?$/.test(numericValue) &&
+                            !entry.key.toLowerCase().includes('invoice');
+                          return (
+                            <div key={`${entry.key}-${index}`} className="py-1.5 flex items-center justify-between gap-3 text-xs">
+                              <span className="text-[#8E8E93] break-words">{entry.key}</span>
+                              <span className="text-[#F5F5F7] font-medium tabular-nums text-right break-words">
+                                {looksLikeCost
+                                  ? `₹${Number(numericValue).toLocaleString('en-IN')}`
+                                  : entry.value}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </article>
+                );
+              })
+            )}
+          </section>
+
+          <section className="space-y-2.5">
             <div className="flex items-center justify-between"><div><h2 className="text-sm font-semibold text-[#F5F5F7]">Ownership Expenses</h2><p className="text-[11px] text-[#8E8E93]">Service ₹{serviceTotal.toLocaleString('en-IN')} · Other ₹{otherExpenseTotal.toLocaleString('en-IN')}</p></div><button onClick={() => setShowExpenseForm(true)} className="h-9 px-3 rounded-xl bg-[#1F2126] text-[#FF6600] text-xs font-semibold">Add Expense</button></div>
             {expenses.map((expense) => <div key={expense.id} className="rounded-xl bg-[#141518] border border-white/[0.08] px-4 py-3 flex items-center justify-between gap-3"><div><p className="text-sm text-[#F5F5F7]">{expense.title}</p><p className="text-[11px] text-[#8E8E93]">{expense.date} · {expense.category}</p></div><div className="flex items-center gap-2"><span className="text-sm font-semibold text-[#F5F5F7]">₹{expense.amount.toLocaleString('en-IN')}</span><button onClick={() => onDeleteExpense(expense.id)} className="p-1.5 text-[#8E8E93]"><TrashIcon /></button></div></div>)}
           </section>
@@ -799,6 +993,117 @@ export const CarePage: React.FC<CarePageProps> = ({
             )}
           </div>
           {backupStatus && <p className="text-xs text-[#FFB27A] bg-[#FF6600]/10 rounded-xl px-3 py-2">{backupStatus}</p>}
+        </div>
+      )}
+
+      {showEventForm && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm">
+          <div className="w-full max-w-lg max-h-[92dvh] overflow-y-auto rounded-t-[28px] border-t border-white/10 bg-[#141518] p-5 space-y-4 animate-sheet-up safe-bottom-sheet">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[11px] font-semibold text-[#FF8A32]">Bike history</p>
+                <h3 className="text-lg font-semibold text-[#F5F5F7]">Log Bike Event</h3>
+                <p className="text-xs text-[#A7A7AD] mt-1">Selected care items are marked complete when this event is saved.</p>
+              </div>
+              <button onClick={() => setShowEventForm(false)} className="w-9 h-9 rounded-full bg-[#1F2126] flex items-center justify-center text-[#A7A7AD] shrink-0" aria-label="Close event logger">
+                <CloseIcon className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveBikeEvent} className="space-y-4">
+              <label className="block text-xs text-[#C7C7CC]">
+                Event template
+                <select
+                  value={eventTemplateId}
+                  onChange={(event) => selectEventTemplate(event.target.value)}
+                  className="field h-12 mt-1.5"
+                >
+                  {BIKE_EVENT_TEMPLATES.map((template) => (
+                    <option key={template.id} value={template.id}>{template.label}</option>
+                  ))}
+                </select>
+              </label>
+
+              <p className="rounded-xl bg-[#1F2126] px-3.5 py-3 text-xs leading-relaxed text-[#A7A7AD]">
+                {selectedEventTemplate.description}
+              </p>
+
+              {eventTemplateId === 'one-time' && (
+                <label className="block text-xs text-[#C7C7CC]">
+                  Event name
+                  <input
+                    required
+                    maxLength={100}
+                    value={eventCustomTitle}
+                    onChange={(event) => setEventCustomTitle(event.target.value)}
+                    placeholder="What happened?"
+                    className="field h-12 mt-1.5"
+                  />
+                  <span className="block text-[10px] text-[#73737A] mt-1">Saved only to this event—not added to the dropdown.</span>
+                </label>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <label className="text-xs text-[#C7C7CC]">
+                  Odometer
+                  <input type="number" inputMode="decimal" min="0.1" step="0.1" required value={eventOdometer} onChange={(event) => setEventOdometer(event.target.value)} className="field h-11 mt-1.5" />
+                </label>
+                <label className="text-xs text-[#C7C7CC]">
+                  Date
+                  <input type="date" required max={localDateInputValue()} value={eventDate} onChange={(event) => setEventDate(event.target.value)} className="field h-11 mt-1.5" />
+                </label>
+              </div>
+
+              <label className="block text-xs text-[#C7C7CC]">
+                Workshop or dealer <span className="text-[#73737A]">(optional)</span>
+                <input maxLength={100} value={eventWorkshop} onChange={(event) => setEventWorkshop(event.target.value)} placeholder="e.g. Premia Vijayawada" className="field h-11 mt-1.5" />
+              </label>
+
+              <fieldset className="space-y-2">
+                <legend className="text-xs font-semibold text-[#F5F5F7]">Maintenance completed</legend>
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-[11px] text-[#8E8E93]">Select only the care items actually completed.</p>
+                  <span className="text-[11px] text-[#FF9A52] shrink-0">{eventTaskIds.length} selected</span>
+                </div>
+                <div className="max-h-52 overflow-y-auto divide-y divide-white/[0.06] rounded-xl bg-[#1F2126] px-3">
+                  {tasks.filter((task) => task.enabled !== false).map((task) => (
+                    <label key={task.id} className="min-h-11 py-2.5 flex items-center justify-between gap-3 text-xs text-[#D1D1D6]">
+                      <span className="leading-snug">{task.title}</span>
+                      <input
+                        type="checkbox"
+                        checked={eventTaskIds.includes(task.id)}
+                        onChange={(changeEvent) =>
+                          setEventTaskIds((previous) =>
+                            changeEvent.target.checked
+                              ? [...previous, task.id]
+                              : previous.filter((id) => id !== task.id)
+                          )
+                        }
+                        className="w-5 h-5 accent-[#FF6600] shrink-0"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
+              <BillReceiptEditor entries={eventBillEntries} onChange={setEventBillEntries} />
+
+              <textarea
+                rows={3}
+                maxLength={1000}
+                value={eventNotes}
+                onChange={(event) => setEventNotes(event.target.value)}
+                placeholder="What changed? Parts, observations, settings or anything that may affect mileage…"
+                className="field p-3"
+              />
+
+              {eventError && <p role="alert" className="rounded-xl bg-[#FF453A]/10 px-3 py-2 text-xs text-[#FFAAA5]">{eventError}</p>}
+
+              <button type="submit" disabled={eventSaving} className="w-full h-14 rounded-2xl bg-[#FF6600] text-white text-sm font-semibold disabled:opacity-50 active:scale-[0.99]">
+                {eventSaving ? 'Saving Event…' : `Save Event${eventTaskIds.length ? ` & Complete ${eventTaskIds.length} Item${eventTaskIds.length === 1 ? '' : 's'}` : ''}`}
+              </button>
+            </form>
+          </div>
         </div>
       )}
 

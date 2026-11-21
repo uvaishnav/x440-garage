@@ -6,7 +6,7 @@ import {
   computeSummaryStats,
   evaluateTaskHealth,
 } from '../lib/calculations';
-import { BikeIssue, FuelLog, MaintenanceTask, Trip } from '../types';
+import { BikeEvent, BikeIssue, FuelLog, MaintenanceTask, Trip } from '../types';
 import { AppSettings, ExpenseLog, MaintenanceLog, TimelineRide } from '../types';
 import { daysUntil } from '../lib/date';
 
@@ -19,6 +19,7 @@ interface HomePageProps {
   settings: AppSettings;
   maintenanceLogs: MaintenanceLog[];
   expenses: ExpenseLog[];
+  bikeEvents: BikeEvent[];
   timelineRides: TimelineRide[];
   onNavigate: (tab: 'fuel' | 'trips' | 'care') => void;
   onQuickMarkTask: (task: MaintenanceTask) => void;
@@ -33,6 +34,7 @@ export const HomePage: React.FC<HomePageProps> = ({
   settings,
   maintenanceLogs,
   expenses,
+  bikeEvents,
   timelineRides,
   onNavigate,
   onQuickMarkTask,
@@ -61,7 +63,8 @@ export const HomePage: React.FC<HomePageProps> = ({
   ].filter((item): item is { label: string; days: number } => Boolean(item));
   const careSpend = maintenanceLogs.reduce((sum, log) => sum + log.totalCost, 0);
   const otherSpend = expenses.reduce((sum, expense) => sum + expense.amount, 0);
-  const ownershipSpend = summary.totalSpend + careSpend + otherSpend;
+  const eventSpend = bikeEvents.reduce((sum, event) => sum + event.totalCost, 0);
+  const ownershipSpend = summary.totalSpend + careSpend + eventSpend + otherSpend;
   const trackedDistance = Math.max(0, currentOdometer - (settings.initialOdometer || 0));
   const ownershipCostPerKm = trackedDistance > 0 ? ownershipSpend / trackedDistance : null;
   const mappedDistance = timelineRides.reduce((sum, ride) => sum + ride.distanceKm, 0);

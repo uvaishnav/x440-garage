@@ -115,6 +115,33 @@ export interface MaintenanceLog {
   totalCost: number;
   billEntries: BillEntry[];
   notes?: string;
+  eventId?: string;
+  createdAt: number;
+}
+
+export type BikeEventKind =
+  | 'Service'
+  | 'Repair'
+  | 'Adjustment'
+  | 'Chain Care'
+  | 'Tyre Work'
+  | 'Brake Work'
+  | 'Inspection'
+  | 'Modification'
+  | 'Other';
+
+export interface BikeEvent {
+  id: string;
+  templateId: string;
+  kind: BikeEventKind;
+  title: string;
+  date: string; // YYYY-MM-DD
+  odometer: number;
+  workshop?: string;
+  notes?: string;
+  completedTaskIds: string[];
+  billEntries: BillEntry[];
+  totalCost: number;
   createdAt: number;
 }
 
@@ -196,4 +223,5 @@ export interface GarageBackup {
   issues?: BikeIssue[];
   timelineRides?: TimelineRide[];
   expenses?: ExpenseLog[];
+  bikeEvents?: BikeEvent[];
 }

@@ -5,16 +5,17 @@ import {
   computeFuelGradeStats,
   computeSummaryStats,
 } from '../lib/calculations';
-import { FuelLog } from '../types';
+import { BikeEvent, FuelLog } from '../types';
 import { EditIcon, LocationPinIcon, TrashIcon } from '../components/Icons';
 
 interface FuelPageProps {
   fuelLogs: FuelLog[];
+  bikeEvents: BikeEvent[];
   onDeleteLog: (id: string) => Promise<void>;
   onEditLog: (log: FuelLog) => void;
 }
 
-export const FuelPage: React.FC<FuelPageProps> = ({ fuelLogs, onDeleteLog, onEditLog }) => {
+export const FuelPage: React.FC<FuelPageProps> = ({ fuelLogs, bikeEvents, onDeleteLog, onEditLog }) => {
   const computed = useMemo(() => computeFuelMetrics(fuelLogs), [fuelLogs]);
   const summary = useMemo(() => computeSummaryStats(computed), [computed]);
   const bunks = useMemo(() => computeBunkLeaderboard(computed), [computed]);
@@ -165,71 +166,112 @@ export const FuelPage: React.FC<FuelPageProps> = ({ fuelLogs, onDeleteLog, onEdi
           </div>
         ) : (
           <div className="space-y-2">
-            {computed.map((log) => (
-              <div
-                key={log.id}
-                className="rounded-2xl bg-[#141518] border border-white/[0.08] p-4 flex items-center justify-between gap-3"
-              >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-[#F5F5F7] tabular-nums">
-                      {log.odometer.toLocaleString('en-IN')} km
-                    </span>
-                    <span className="px-2 py-0.5 rounded-md bg-[#1F2126] text-[10px] font-medium text-[#8E8E93]">
-                      {log.fuelGrade} · {log.rideMix}
-                    </span>
-                    {!log.isFullTank && (
-                      <span className="px-2 py-0.5 rounded-md bg-[#FFD60A]/15 text-[10px] font-medium text-[#FFD60A]">
-                        Partial
-                      </span>
-                    )}
+            {computed.map((log, logIndex) => {
+              const intervalStart = log.distanceKm ? log.odometer - log.distanceKm : null;
+              const intervalEvents = intervalStart == null
+                ? []
+                : bikeEvents
+                    .filter(
+                      (event) =>
+                        event.odometer >= intervalStart - 250 &&
+                        event.odometer <= log.odometer
+                    )
+                    .sort((a, b) => a.odometer - b.odometer);
+              const previousMeasured = computed
+                .slice(logIndex + 1)
+                .find((item) => item.mileageKmpl != null);
+              const mileageChange =
+                log.mileageKmpl != null && previousMeasured?.mileageKmpl != null
+                  ? Number((log.mileageKmpl - previousMeasured.mileageKmpl).toFixed(1))
+                  : null;
+
+              return (
+                <div
+                  key={log.id}
+                  className="rounded-2xl bg-[#141518] border border-white/[0.08] p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-semibold text-[#F5F5F7] tabular-nums">
+                          {log.odometer.toLocaleString('en-IN')} km
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-[#1F2126] text-[10px] font-medium text-[#A7A7AD]">
+                          {log.fuelGrade} · {log.rideMix}
+                        </span>
+                        {!log.isFullTank && (
+                          <span className="px-2 py-0.5 rounded-md bg-[#FFD60A]/15 text-[10px] font-medium text-[#FFD60A]">
+                            Partial
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-[#A7A7AD] flex items-center gap-1 mt-1 truncate">
+                        <LocationPinIcon className="w-3.5 h-3.5 shrink-0 text-[#73737A]" />
+                        <span className="truncate">{log.bunkName}</span>
+                      </p>
+
+                      <p className="text-[11px] text-[#8E8E93] tabular-nums mt-1">
+                        {log.date} · {log.litres} L · ₹{log.totalCost.toLocaleString('en-IN')}
+                        {log.distanceKm ? ` · +${log.distanceKm} km` : ''}
+                      </p>
+                      {log.mileageKmpl && log.sourceBunkName && (
+                        <p className="text-[10px] text-[#73737A] mt-1 truncate">
+                          Interval fuel: {log.sourceBunkName}
+                          {log.intervalHadPartialFills ? ' + partial top-ups (excluded from bunk ranking)' : ''}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div className="text-right">
+                        <p className="text-lg font-semibold text-[#FF6600] tabular-nums">
+                          {log.mileageKmpl ? log.mileageKmpl : '—'}
+                        </p>
+                        <p className="text-[10px] text-[#73737A]">
+                          {log.mileageKmpl ? 'km/L' : log.isFullTank ? 'Baseline' : 'Pending'}
+                        </p>
+                      </div>
+                      <div className="flex items-center">
+                        <button onClick={() => onEditLog(log)} className="p-2 text-[#A7A7AD] active:text-[#FF6600]" aria-label="Edit fuel log">
+                          <EditIcon className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => onDeleteLog(log.id)} className="p-2 text-[#A7A7AD] active:text-[#FF453A]" aria-label="Delete fuel log">
+                          <TrashIcon className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
                   </div>
 
-                  <p className="text-xs text-[#8E8E93] flex items-center gap-1 mt-1 truncate">
-                    <LocationPinIcon className="w-3.5 h-3.5 shrink-0 text-[#636366]" />
-                    <span className="truncate">{log.bunkName}</span>
-                  </p>
-
-                  <p className="text-[11px] text-[#636366] tabular-nums mt-1">
-                    {log.date} · {log.litres} L · ₹{log.totalCost.toLocaleString('en-IN')}
-                    {log.distanceKm ? ` · +${log.distanceKm} km` : ''}
-                  </p>
-                  {log.mileageKmpl && log.sourceBunkName && (
-                    <p className="text-[10px] text-[#636366] mt-1 truncate">
-                      Interval fuel: {log.sourceBunkName}
-                      {log.intervalHadPartialFills ? ' + partial top-ups (excluded from bunk ranking)' : ''}
-                    </p>
+                  {log.mileageKmpl && intervalEvents.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-white/[0.07] space-y-2">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-[11px] font-semibold text-[#F5F5F7]">Possible contributing events</p>
+                        {mileageChange != null && (
+                          <span className={`text-[11px] font-semibold tabular-nums ${mileageChange >= 0 ? 'text-[#30D158]' : 'text-[#FF8A82]'}`}>
+                            {mileageChange >= 0 ? '+' : ''}{mileageChange} km/L
+                          </span>
+                        )}
+                      </div>
+                      {intervalEvents.map((event) => (
+                        <div key={event.id} className="flex items-start justify-between gap-3 text-[11px]">
+                          <div className="min-w-0">
+                            <p className="text-[#E5E5E8] truncate">{event.title}</p>
+                            <p className="text-[#73737A] tabular-nums">
+                              {event.date} · {event.odometer.toLocaleString('en-IN')} km
+                            </p>
+                          </div>
+                          <span className="shrink-0 text-[10px] text-[#FFB27A]">
+                            {event.odometer < (intervalStart ?? event.odometer) ? 'Before interval' : 'During interval'}
+                          </span>
+                        </div>
+                      ))}
+                      <p className="text-[10px] text-[#636366]">Shown as context, not proof of cause.</p>
+                    </div>
                   )}
                 </div>
-
-                <div className="flex items-center gap-3 shrink-0">
-                  <div className="text-right">
-                    <p className="text-lg font-semibold text-[#FF6600] tabular-nums">
-                      {log.mileageKmpl ? log.mileageKmpl : '—'}
-                    </p>
-                    <p className="text-[10px] text-[#636366]">
-                      {log.mileageKmpl ? 'km/L' : log.isFullTank ? 'Baseline' : 'Pending'}
-                    </p>
-                  </div>
-                  <div className="flex items-center">
-                    <button
-                      onClick={() => onEditLog(log)}
-                      className="p-2 text-[#8E8E93] active:text-[#FF6600]"
-                      aria-label="Edit fuel log"
-                    >
-                      <EditIcon className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => onDeleteLog(log.id)}
-                      className="p-2 text-[#8E8E93] active:text-[#FF453A]"
-                      aria-label="Delete fuel log"
-                    >
-                      <TrashIcon className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>

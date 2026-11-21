@@ -13,6 +13,7 @@ import { User } from 'firebase/auth';
 import { db, isFirebaseConfigured } from '../lib/firebase';
 import {
   AppSettings,
+  BikeEvent,
   BikeIssue,
   ExpenseLog,
   FuelLog,
@@ -40,6 +41,7 @@ interface GarageState {
   issues: BikeIssue[];
   timelineRides: TimelineRide[];
   expenses: ExpenseLog[];
+  bikeEvents: BikeEvent[];
   settings: AppSettings;
 }
 
@@ -85,6 +87,7 @@ function loadLocalState(): GarageState {
         issues: parsed.issues || [],
         timelineRides: parsed.timelineRides || [],
         expenses: parsed.expenses || [],
+        bikeEvents: parsed.bikeEvents || [],
         settings: {
           ...DEFAULT_SETTINGS,
           ...(parsed.settings || {}),
@@ -103,6 +106,7 @@ function loadLocalState(): GarageState {
     issues: [],
     timelineRides: [],
     expenses: [],
+    bikeEvents: [],
     settings: DEFAULT_SETTINGS,
   };
 }
@@ -115,6 +119,7 @@ export function useGarageData(user: User | null) {
   const [issues, setIssues] = useState<BikeIssue[]>([]);
   const [timelineRides, setTimelineRides] = useState<TimelineRide[]>([]);
   const [expenses, setExpenses] = useState<ExpenseLog[]>([]);
+  const [bikeEvents, setBikeEvents] = useState<BikeEvent[]>([]);
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [loading, setLoading] = useState(true);
   const [dataError, setDataError] = useState<string | null>(null);
@@ -134,6 +139,7 @@ export function useGarageData(user: User | null) {
           issues,
           timelineRides,
           expenses,
+          bikeEvents,
           settings,
         })
       );
@@ -148,6 +154,7 @@ export function useGarageData(user: User | null) {
     issues,
     timelineRides,
     expenses,
+    bikeEvents,
     settings,
   ]);
 
@@ -161,6 +168,7 @@ export function useGarageData(user: User | null) {
       setIssues(local.issues);
       setTimelineRides(local.timelineRides);
       setExpenses(local.expenses);
+      setBikeEvents(local.bikeEvents);
       setSettings(local.settings);
       setDataError(null);
       setLoading(false);
@@ -308,6 +316,19 @@ export function useGarageData(user: User | null) {
 
     unsubs.push(
       onSnapshot(
+        collection(firestore, 'users', uid, 'bikeEvents'),
+        (snap) => {
+          const list = snap.docs
+            .map((d) => ({ id: d.id, ...(d.data() as Omit<BikeEvent, 'id'>) }))
+            .sort((a, b) => b.odometer - a.odometer || b.date.localeCompare(a.date));
+          setBikeEvents(list);
+        },
+        handleSnapshotError
+      )
+    );
+
+    unsubs.push(
+      onSnapshot(
         doc(firestore, 'users', uid, 'meta', 'settings'),
         (snap) => {
           if (snap.exists()) {
@@ -335,9 +356,10 @@ export function useGarageData(user: User | null) {
       ...fuelLogs.map((l) => l.odometer),
       ...trips.map((t) => t.endOdometer ?? t.startOdometer),
       ...maintenanceLogs.map((m) => m.odometer),
+      ...bikeEvents.map((event) => event.odometer),
     ];
     return Math.max(0, ...candidates);
-  }, [settings.initialOdometer, fuelLogs, trips, maintenanceLogs]);
+  }, [settings.initialOdometer, fuelLogs, trips, maintenanceLogs, bikeEvents]);
 
   const activeTrip = useMemo(
     () => trips.find((t) => t.status === 'active') || null,
@@ -515,6 +537,119 @@ export function useGarageData(user: User | null) {
     }
   };
 
+  const saveBikeEvent = async (event: BikeEvent) => {
+    const completedTasks = tasks.filter((task) => event.completedTaskIds.includes(task.id));
+    const eventLogs: MaintenanceLog[] = completedTasks.map((task, index) => ({
+      id: `maint-${event.id}-${task.id}`,
+      taskId: task.id,
+      taskTitle: task.title,
+      date: event.date,
+      odometer: event.odometer,
+      totalCost: 0,
+      billEntries: [],
+      notes: `Completed during ${event.title}`,
+      eventId: event.id,
+      createdAt: event.createdAt + index,
+    }));
+    const taskUpdates = completedTasks.map((task) => {
+      const latest = [...maintenanceLogs, ...eventLogs]
+        .filter((log) => log.taskId === task.id)
+        .sort(
+          (a, b) =>
+            b.odometer - a.odometer ||
+            b.date.localeCompare(a.date) ||
+            b.createdAt - a.createdAt
+        )[0];
+      const eventIsLatest = latest?.eventId === event.id;
+      return {
+        ...task,
+        lastDoneOdometer: latest?.odometer ?? task.lastDoneOdometer,
+        lastDoneDate: latest?.date ?? task.lastDoneDate,
+        dueNowReason: eventIsLatest ? undefined : task.dueNowReason,
+      };
+    });
+
+    if (isCloud && db && user) {
+      const batch = writeBatch(db);
+      batch.set(
+        doc(db, 'users', user.uid, 'bikeEvents', event.id),
+        withoutUndefined(event)
+      );
+      taskUpdates.forEach((task) => {
+        batch.set(
+          doc(db!, 'users', user.uid, 'maintenanceTasks', task.id),
+          withoutUndefined(task)
+        );
+      });
+      eventLogs.forEach((log) => {
+        batch.set(
+          doc(db!, 'users', user.uid, 'maintenanceLogs', log.id),
+          withoutUndefined(log)
+        );
+      });
+      await batch.commit();
+      return;
+    }
+
+    setBikeEvents((previous) =>
+      [event, ...previous.filter((item) => item.id !== event.id)].sort(
+        (a, b) => b.odometer - a.odometer || b.date.localeCompare(a.date)
+      )
+    );
+    setTasks((previous) =>
+      previous.map((task) => taskUpdates.find((item) => item.id === task.id) || task)
+    );
+    setMaintenanceLogs((previous) => [
+      ...eventLogs,
+      ...previous.filter((log) => log.eventId !== event.id),
+    ]);
+  };
+
+  const deleteBikeEvent = async (event: BikeEvent) => {
+    const eventLogs = maintenanceLogs.filter((log) => log.eventId === event.id);
+    const remainingLogs = maintenanceLogs.filter((log) => log.eventId !== event.id);
+    const affectedTaskIds = new Set(eventLogs.map((log) => log.taskId));
+    const taskUpdates = tasks
+      .filter((task) => affectedTaskIds.has(task.id))
+      .map((task) => {
+        const latest = remainingLogs
+          .filter((log) => log.taskId === task.id)
+          .sort(
+            (a, b) =>
+              b.odometer - a.odometer ||
+              b.date.localeCompare(a.date) ||
+              b.createdAt - a.createdAt
+          )[0];
+        return {
+          ...task,
+          lastDoneOdometer: latest?.odometer ?? null,
+          lastDoneDate: latest?.date ?? null,
+        };
+      });
+
+    if (isCloud && db && user) {
+      const batch = writeBatch(db);
+      batch.delete(doc(db, 'users', user.uid, 'bikeEvents', event.id));
+      eventLogs.forEach((log) => {
+        batch.delete(doc(db!, 'users', user.uid, 'maintenanceLogs', log.id));
+      });
+      taskUpdates.forEach((task) => {
+        batch.set(
+          doc(db!, 'users', user.uid, 'maintenanceTasks', task.id),
+          withoutUndefined(task)
+        );
+      });
+      await batch.commit();
+      return;
+    }
+
+    setBikeEvents((previous) => previous.filter((item) => item.id !== event.id));
+    setMaintenanceLogs(remainingLogs);
+    setTasks((previous) =>
+      previous.map((task) => taskUpdates.find((item) => item.id === task.id) || task)
+    );
+  };
+
   const saveSettings = async (next: AppSettings) => {
     if (isCloud && db && user) {
       await setDoc(doc(db, 'users', user.uid, 'meta', 'settings'), withoutUndefined(next));
@@ -533,6 +668,7 @@ export function useGarageData(user: User | null) {
       backup.issues?.forEach((item) => writes.push({ collectionName: 'issues', id: item.id, value: item }));
       backup.timelineRides?.forEach((item) => writes.push({ collectionName: 'timelineRides', id: item.id, value: item }));
       backup.expenses?.forEach((item) => writes.push({ collectionName: 'expenses', id: item.id, value: item }));
+      backup.bikeEvents?.forEach((item) => writes.push({ collectionName: 'bikeEvents', id: item.id, value: item }));
       for (let index = 0; index < writes.length; index += 400) {
         const batch = writeBatch(db);
         for (const write of writes.slice(index, index + 400)) {
@@ -553,6 +689,7 @@ export function useGarageData(user: User | null) {
     if (backup.issues) setIssues(backup.issues);
     if (backup.timelineRides) setTimelineRides(backup.timelineRides);
     if (backup.expenses) setExpenses(backup.expenses);
+    if (backup.bikeEvents) setBikeEvents(backup.bikeEvents);
     if (backup.settings) {
       setSettings({
         ...DEFAULT_SETTINGS,
@@ -594,6 +731,7 @@ export function useGarageData(user: User | null) {
     issues,
     timelineRides,
     expenses,
+    bikeEvents,
     settings,
     saveFuelLog,
     deleteFuelLog,
@@ -608,6 +746,8 @@ export function useGarageData(user: User | null) {
     deleteIssue,
     saveTimelineRides,
     deleteTimelineRide,
+    saveBikeEvent,
+    deleteBikeEvent,
     saveSettings,
     importBackup,
     saveExpense,

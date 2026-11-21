@@ -95,6 +95,7 @@ export default function App() {
             settings={garage.settings}
             maintenanceLogs={garage.maintenanceLogs}
             expenses={garage.expenses}
+            bikeEvents={garage.bikeEvents}
             timelineRides={garage.timelineRides}
             onNavigate={(tab) => setActiveTab(tab)}
             onQuickMarkTask={(task) => {
@@ -107,6 +108,7 @@ export default function App() {
         {activeTab === 'fuel' && (
           <FuelPage
             fuelLogs={garage.fuelLogs}
+            bikeEvents={garage.bikeEvents}
             onDeleteLog={garage.deleteFuelLog}
             onEditLog={(log) => {
               setEditingFuelLog(log);
@@ -140,6 +142,7 @@ export default function App() {
             fuelLogs={garage.fuelLogs}
             trips={garage.trips}
             expenses={garage.expenses}
+            bikeEvents={garage.bikeEvents}
             timelineRides={garage.timelineRides}
             preselectedTask={preselectedTask}
             onClearPreselectedTask={() => setPreselectedTask(null)}
@@ -152,6 +155,8 @@ export default function App() {
             onDeleteIssue={garage.deleteIssue}
             onSaveExpense={garage.saveExpense}
             onDeleteExpense={garage.deleteExpense}
+            onSaveBikeEvent={garage.saveBikeEvent}
+            onDeleteBikeEvent={garage.deleteBikeEvent}
             onImportBackup={garage.importBackup}
             onSaveSettings={garage.saveSettings}
             onSignOut={auth && user ? () => signOut(auth!) : undefined}
