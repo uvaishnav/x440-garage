@@ -1118,7 +1118,7 @@ export const CarePage: React.FC<CarePageProps> = ({
               <div>
                 <p className="text-[#F5F5F7] font-medium">Timeline Fallback Filter</p>
                 <p className="text-[11px] text-[#8E8E93]">
-                  Include rides Google mislabeled as Driving
+                  Include driving segments as unverified ride legs
                 </p>
               </div>
               <input

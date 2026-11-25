@@ -1,5 +1,5 @@
-import React, { useRef, useState } from 'react';
-import { RouteMap } from '../components/RouteMap';
+import React, { useMemo, useRef, useState } from 'react';
+import { RideTripSummary, RidingStats, TimelineTripCard } from '../components/RideHistory';
 import {
   CheckIcon,
   CloseIcon,
@@ -12,7 +12,7 @@ import { buildPreRideChecklist } from '../lib/calculations';
 import { localDateInputValue, localDateTimeValue } from '../lib/date';
 import { parseGoogleTimelineJson } from '../lib/timelineParser';
 import { parseGpx } from '../lib/gpxParser';
-import { enrichRidePlaces } from '../lib/osmEnrichment';
+import { buildRideHistory, newTimelineRides } from '../lib/rideHistory';
 import { AppSettings, FuelLog, MaintenanceTask, TimelineRide, Trip } from '../types';
 
 interface TripsPageProps {
@@ -62,10 +62,14 @@ export const TripsPage: React.FC<TripsPageProps> = ({
   const [saveError, setSaveError] = useState('');
 
   const [importStatus, setImportStatus] = useState('');
+  const [importing, setImporting] = useState(false);
+  const [visibleTrips, setVisibleTrips] = useState(6);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const uploadInProgress = useRef(false);
 
   const activeTrip = trips.find((trip) => trip.status === 'active') || null;
   const pastTrips = trips.filter((trip) => trip.status === 'completed');
+  const { byTrip, timelineTrips } = useMemo(() => buildRideHistory(timelineRides, trips), [timelineRides, trips]);
 
   const openNewTrip = () => {
     setEditingTrip(null);
@@ -192,75 +196,40 @@ export const TripsPage: React.FC<TripsPageProps> = ({
   };
 
   const handleTimelineUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    if (!file || uploadInProgress.current) return;
+    const gpx = file.name.toLowerCase().endsWith('.gpx');
+    uploadInProgress.current = true;
+    setImporting(true);
     setImportStatus('Parsing ride file…');
+    let saving = false;
     try {
       const text = await file.text();
-      let parsed = file.name.toLowerCase().endsWith('.gpx')
+      const parsed = gpx
         ? parseGpx(text)
         : parseGoogleTimelineJson(text, settings.includeAmbiguousDriving);
       if (!parsed.length) {
-        setImportStatus(
-          'No motorcycle rides found. Enable the Driving fallback in Settings if Google mislabeled the ride.'
-        );
-      } else {
-        setImportStatus(`Found ${parsed.length} rides · matching trips and naming places…`);
-        const matchedTrips = new Map<string, Trip>();
-        parsed = parsed.map((ride) => {
-          const rideTime = new Date(ride.startTime).getTime();
-          const match = trips.find((trip) => {
-            const start = new Date(trip.startTime || `${trip.startDate}T00:00`).getTime();
-            const finish = new Date(
-              trip.endTime || `${trip.endDate || trip.startDate}T23:59`
-            ).getTime();
-            return rideTime >= start - 3_600_000 && rideTime <= finish + 3_600_000;
-          });
-          if (!match) return ride;
-          matchedTrips.set(match.id, {
-            ...match,
-            linkedTimelineRideIds: Array.from(
-              new Set([...(match.linkedTimelineRideIds || []), ride.id])
-            ),
-          });
-          return { ...ride, tripId: match.id };
-        });
-        for (const trip of matchedTrips.values()) await onSaveTrip(trip);
-        const enriched: TimelineRide[] = [];
-        for (let index = 0; index < parsed.length; index += 1) {
-          setImportStatus(`Naming places ${index + 1}/${parsed.length}…`);
-          enriched.push(await enrichRidePlaces(parsed[index]));
-        }
-        await onImportTimeline(enriched);
-        setImportStatus(`Imported ${enriched.length} motorcycle ride${enriched.length === 1 ? '' : 's'}.`);
+        setImportStatus(gpx ? 'No GPS tracks found in this file.' : 'No matching motorcycle activity found in this export.');
+        return;
       }
+      const incoming = newTimelineRides(parsed, timelineRides);
+      if (!incoming.length) {
+        setImportStatus('You’re up to date. This file has no new ride legs.');
+        return;
+      }
+      saving = true;
+      setImportStatus(`Saving ${incoming.length} ride ${incoming.length === 1 ? 'leg' : 'legs'}…`);
+      await onImportTimeline(incoming);
+      setImportStatus(`Added ${incoming.length} ride ${incoming.length === 1 ? 'leg' : 'legs'}.`);
     } catch {
-      setImportStatus('This file could not be read as a supported Timeline JSON export.');
+      setImportStatus(saving ? 'Could not finish saving. Import the same file again to retry.'
+        : gpx ? 'Could not read this GPX file.' : 'Could not read this file as a Google Maps Timeline export.');
     } finally {
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      input.value = '';
+      uploadInProgress.current = false;
+      setImporting(false);
     }
-  };
-
-  const linkTimelineRide = async (ride: TimelineRide, tripId: string) => {
-    const previousTrip = trips.find((trip) => trip.id === ride.tripId);
-    const nextTrip = trips.find((trip) => trip.id === tripId);
-    if (previousTrip && previousTrip.id !== tripId) {
-      await onSaveTrip({
-        ...previousTrip,
-        linkedTimelineRideIds: (previousTrip.linkedTimelineRideIds || []).filter(
-          (id) => id !== ride.id
-        ),
-      });
-    }
-    if (nextTrip) {
-      await onSaveTrip({
-        ...nextTrip,
-        linkedTimelineRideIds: Array.from(
-          new Set([...(nextTrip.linkedTimelineRideIds || []), ride.id])
-        ),
-      });
-    }
-    await onImportTimeline([{ ...ride, tripId: tripId || null }]);
   };
 
   const tripStats = (trip: Trip) => {
@@ -322,17 +291,25 @@ export const TripsPage: React.FC<TripsPageProps> = ({
               </button>
             ))}
           </div>
+          <RideTripSummary rides={byTrip.get(activeTrip.id) ?? []} manual />
         </section>
       )}
 
       <section className="rounded-2xl bg-[#141518] border border-white/[0.08] p-4 space-y-3">
         <div className="flex items-center justify-between gap-3">
-          <div><p className="text-sm font-semibold text-[#F5F5F7]">Google Maps Timeline Import</p><p className="text-[11px] text-[#8E8E93] mt-0.5">Motorcycle rides only; car, bus and walking are skipped.</p></div>
+          <div>
+            <h2 className="text-sm font-semibold text-[#F5F5F7]">Import ride history</h2>
+            <p className="mt-0.5 text-xs text-[#B3B3BB]">Google Maps Timeline or GPX. Only new ride legs are saved.</p>
+          </div>
           <input ref={fileInputRef} type="file" accept=".json,.gpx,application/json,application/gpx+xml" onChange={handleTimelineUpload} className="hidden" />
-          <button onClick={() => fileInputRef.current?.click()} className="shrink-0 h-10 px-3.5 rounded-xl bg-[#1F2126] border border-white/10 text-xs font-medium text-[#F5F5F7] flex items-center gap-1.5"><UploadIcon className="w-4 h-4 text-[#FF6600]" /> Import</button>
+          <button type="button" disabled={importing} onClick={() => fileInputRef.current?.click()} className="flex min-h-11 shrink-0 items-center gap-1.5 rounded-xl border border-white/10 bg-[#1F2126] px-3.5 text-sm font-medium text-[#F5F5F7] hover:bg-[#282A30] disabled:opacity-50"><UploadIcon className="size-4 text-[#FF8037]" /> Import</button>
         </div>
-        {importStatus && <p className="text-xs text-[#FFB27A] bg-[#FF6600]/10 rounded-xl px-3 py-2">{importStatus}</p>}
+        <div role="status" aria-live="polite">
+          {importStatus && <p className="rounded-xl bg-[#FF6600]/10 px-3 py-2 text-xs text-[#FFBE90]">{importStatus}</p>}
+        </div>
       </section>
+
+      {timelineRides.length > 0 && <RidingStats rides={timelineRides} onDelete={onDeleteTimelineRide} />}
 
       {pastTrips.length > 0 && (
         <section className="space-y-2.5">
@@ -352,6 +329,7 @@ export const TripsPage: React.FC<TripsPageProps> = ({
                   <TripMetric label="Cost / km" value={stats.costPerKm ? `₹${stats.costPerKm.toFixed(2)}` : '—'} />
                 </div>
                 {trip.notes && <p className="text-xs text-[#8E8E93]">{trip.notes}</p>}
+                <RideTripSummary rides={byTrip.get(trip.id) ?? []} manual />
               </div>
             );
           })}
@@ -360,23 +338,17 @@ export const TripsPage: React.FC<TripsPageProps> = ({
 
       {timelineRides.length > 0 && (
         <section className="space-y-3">
-          <div className="flex justify-between px-1"><h2 className="text-sm font-semibold text-[#F5F5F7]">Timeline Motorcycle Rides</h2><span className="text-[11px] text-[#636366]">{timelineRides.length} rides</span></div>
-          {timelineRides.slice(0, 20).map((ride) => (
-            <div key={ride.id} className="rounded-2xl bg-[#141518] border border-white/[0.08] p-4 space-y-3">
-              <div className="flex justify-between gap-3"><div><p className="text-sm font-semibold text-[#F5F5F7]">{ride.startName && ride.endName ? `${ride.startName} → ${ride.endName}` : `${ride.distanceKm} km Ride`}</p><p className="text-[11px] text-[#8E8E93]">{ride.date} · {ride.durationMin} min{ride.movingMin ? ` (${ride.movingMin} moving)` : ''} · Avg {ride.avgSpeedKmh} km/h</p></div><span className="text-[11px] text-[#FF6600]">{ride.highwayPercent}% Hwy</span></div>
-              <RouteMap points={ride.points} heightClass="h-40" />
-              <div className="h-1.5 rounded-full bg-[#636366] overflow-hidden"><div className="h-full bg-[#FF6600]" style={{ width: `${ride.highwayPercent}%` }} /></div>
-              <RideSpeedBands ride={ride} />
-              <div className="flex items-center gap-2">
-                <select value={ride.tripId || ''} onChange={(event) => linkTimelineRide(ride, event.target.value)} className="field h-10 text-xs flex-1">
-                  <option value="">Not linked to a manual trip</option>
-                  {trips.map((trip) => <option key={trip.id} value={trip.id}>{trip.name}</option>)}
-                </select>
-                <span className="text-[10px] text-[#636366] uppercase">{ride.source === 'gpx' ? 'GPX' : 'Timeline'}</span>
-                <button onClick={() => onDeleteTimelineRide(ride.id)} className="w-10 h-10 rounded-xl bg-[#1F2126] text-[#8E8E93] flex items-center justify-center" aria-label="Delete imported ride"><TrashIcon /></button>
-              </div>
-            </div>
+          <div className="px-1">
+            <h2 className="text-base font-semibold text-[#F5F5F7]">Long rides</h2>
+            <p className="mt-0.5 text-xs text-[#B3B3BB]">Trips with more than an hour of recorded ride time.</p>
+          </div>
+          {timelineTrips.slice(0, visibleTrips).map(({ rides, roundTrip }) => (
+            <TimelineTripCard key={rides[0].id} rides={rides} roundTrip={roundTrip} />
           ))}
+          {timelineTrips.length === 0 && <p className="px-1 text-sm text-[#B3B3BB]">No long rides found outside your manual trips. Short rides appear in Riding stats.</p>}
+          {visibleTrips < timelineTrips.length && (
+            <button type="button" className="min-h-11 w-full rounded-xl bg-[#1F2126] text-sm font-medium text-[#FFBE90] hover:bg-[#282A30]" onClick={() => setVisibleTrips((count) => count + 6)}>Show more long rides</button>
+          )}
         </section>
       )}
 
@@ -420,12 +392,3 @@ const LabeledInput: React.FC<{ label: string; type: string; value: string; onCha
 const TankLevelEditor: React.FC<{ label: string; full: boolean; onFull: (value: boolean) => void; percent: string; onPercent: (value: string) => void }> = ({ label, full, onFull, percent, onPercent }) => <div className="rounded-xl bg-[#1F2126] border border-white/[0.08] p-3 space-y-2"><label className="flex items-center justify-between text-xs text-[#F5F5F7]">{label}<input type="checkbox" checked={full} onChange={(event) => onFull(event.target.checked)} className="accent-[#FF6600] w-4 h-4" /></label>{!full && <label className="text-[11px] text-[#8E8E93]">Approximate tank level: {percent}%<input type="range" min="0" max="100" step="5" value={percent} onChange={(event) => onPercent(event.target.value)} className="w-full accent-[#FF6600] mt-2" /></label>}</div>;
 
 const ErrorMessage: React.FC<{ text: string }> = ({ text }) => <p role="alert" className="text-xs text-[#FF8A82] bg-[#FF453A]/10 border border-[#FF453A]/25 rounded-xl px-3 py-2">{text}</p>;
-
-const RideSpeedBands: React.FC<{ ride: TimelineRide }> = ({ ride }) => {
-  const speeds = ride.points.map((point) => point.speedKmh).filter((speed): speed is number => speed != null && Number.isFinite(speed));
-  if (!speeds.length) return <p className="text-[10px] text-[#636366]">Road split: {ride.classificationMethod === 'osm' ? 'OSM road metadata + speed' : 'average-speed estimate'}</p>;
-  const city = Math.round((speeds.filter((speed) => speed < 35).length / speeds.length) * 100);
-  const cruise = Math.round((speeds.filter((speed) => speed >= 35 && speed < 70).length / speeds.length) * 100);
-  const fast = Math.max(0, 100 - city - cruise);
-  return <div className="grid grid-cols-3 gap-2 text-[10px] text-[#8E8E93]"><span>Under 35 · {city}%</span><span>35–70 · {cruise}%</span><span>70+ · {fast}%</span></div>;
-};

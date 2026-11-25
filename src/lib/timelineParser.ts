@@ -1,243 +1,209 @@
-import { RoutePoint, TimelineRide } from '../types';
+import type { RoutePoint, TimelineRide } from '../types';
+import { localDateInputValue } from './date';
+import { analyzeRouteSamples, routeDistanceKm, splitRouteTrace } from './routeTrace';
 
-function parseLatLngString(raw: string): RoutePoint | null {
-  // Handles formats like "17.385044°, 78.486671°" or "geo:17.385,78.486"
-  const cleaned = raw.replace(/°/g, '').replace(/^geo:/i, '').trim();
-  const parts = cleaned.split(',').map((p) => parseFloat(p.trim()));
-  if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-    return { lat: parts[0], lng: parts[1] };
+function numeric(value: unknown): number | undefined {
+  if (typeof value !== 'number' && (typeof value !== 'string' || !value.trim())) return;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+}
+
+function coordinates(lat: unknown, lng: unknown): RoutePoint | undefined {
+  const latitude = numeric(lat);
+  const longitude = numeric(lng);
+  if (latitude == null || longitude == null || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) return;
+  return { lat: latitude, lng: longitude };
+}
+
+function parseLocation(raw: unknown): RoutePoint | undefined {
+  if (typeof raw !== 'string') return;
+  const parts = raw.trim().replace(/^geo:/i, '').replace(/°/g, '').split(',');
+  if (parts.length === 2) return coordinates(parts[0], parts[1]);
+}
+
+function timestamp(raw: unknown): number {
+  return typeof raw === 'string' ? Date.parse(raw) : NaN;
+}
+
+function activityType(raw: unknown): string {
+  return typeof raw === 'string' ? raw.trim().toUpperCase().replace(/[\s-]+/g, '_') : '';
+}
+
+interface TimedPoint {
+  point: RoutePoint;
+  ms: number;
+}
+
+function pathPoints(path: unknown, windowStart: number): TimedPoint[] {
+  if (!Array.isArray(path)) return [];
+  return path.flatMap((entry) => {
+    const point = parseLocation(entry?.point);
+    const time = timestamp(entry?.time);
+    const offset = numeric(entry?.durationMinutesOffsetFromStartTime);
+    const ms = Number.isFinite(time) ? time
+      : offset != null && offset >= 0 ? windowStart + offset * 60_000
+      : NaN;
+    // Keep times within the range accepted by Date.toISOString.
+    if (!point || !Number.isFinite(new Date(ms).getTime())) return [];
+    return [{ point: { ...point, time: new Date(ms).toISOString() }, ms }];
+  });
+}
+
+function lowerBound(points: TimedPoint[], time: number): number {
+  let low = 0;
+  let high = points.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (points[middle].ms < time) low = middle + 1;
+    else high = middle;
   }
-  return null;
+  return low;
 }
 
-function haversineKm(a: RoutePoint, b: RoutePoint): number {
-  const R = 6371;
-  const toRad = (deg: number) => (deg * Math.PI) / 180;
-  const dLat = toRad(b.lat - a.lat);
-  const dLng = toRad(b.lng - a.lng);
-  const x =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+function reduceTrace(points: RoutePoint[]): RoutePoint[] {
+  const limit = 500;
+  if (points.length <= limit) return points;
+  return Array.from({ length: limit }, (_, index) =>
+    points[Math.round(index * (points.length - 1) / (limit - 1))]
+  );
 }
 
-function classifyRoadSplit(distanceKm: number, durationMin: number, avgSpeedKmh: number) {
-  if (durationMin <= 0 || distanceKm <= 0) {
-    return { highwayPercent: 0, cityPercent: 100 };
-  }
-  // Heuristic calibrated for Indian highways (e.g., NH65 Vja-Hyd avg 55-75 km/h vs city 18-32 km/h)
-  if (avgSpeedKmh >= 58) return { highwayPercent: 85, cityPercent: 15 };
-  if (avgSpeedKmh >= 45) return { highwayPercent: 65, cityPercent: 35 };
-  if (avgSpeedKmh >= 35) return { highwayPercent: 35, cityPercent: 65 };
-  return { highwayPercent: 10, cityPercent: 90 };
+function textValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-function downsamplePoints(points: RoutePoint[], maximum = 500): RoutePoint[] {
-  if (points.length <= maximum) return points;
-  const sampled: RoutePoint[] = [];
-  for (let index = 0; index < maximum; index += 1) {
-    sampled.push(points[Math.round((index * (points.length - 1)) / (maximum - 1))]);
-  }
-  return sampled;
+interface RideInput {
+  type: string;
+  startTime: string;
+  endTime: string;
+  distanceMeters?: number;
+  points: RoutePoint[];
+  startName?: string;
+  endName?: string;
 }
 
-function annotateMotion(points: RoutePoint[], durationMin: number) {
-  let movingSeconds = 0;
-  for (let index = 1; index < points.length; index += 1) {
-    const from = points[index - 1];
-    const to = points[index];
-    if (!from.time || !to.time) continue;
-    const seconds = Math.max(0, (new Date(to.time).getTime() - new Date(from.time).getTime()) / 1000);
-    if (!seconds) continue;
-    const speed = (haversineKm(from, to) / seconds) * 3600;
-    to.speedKmh = Number(speed.toFixed(1));
-    if (speed > 3) movingSeconds += seconds;
-  }
-  const movingMin = movingSeconds > 0 ? Math.max(1, Math.round(movingSeconds / 60)) : durationMin;
-  return { movingMin, stoppedMin: Math.max(0, durationMin - movingMin) };
+function buildRide(input: RideInput): TimelineRide | undefined {
+  const { type, startTime, endTime, points, startName, endName } = input;
+  const start = timestamp(startTime);
+  const end = timestamp(endTime);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+
+  const trace = analyzeRouteSamples(points);
+  const traceKm = () => splitRouteTrace(points).reduce((km, part) =>
+    km + part.slice(1).reduce((sum, point, i) => sum + routeDistanceKm(part[i], point), 0), 0);
+  const distanceKm = input.distanceMeters != null && input.distanceMeters > 0
+    ? input.distanceMeters / 1000
+    : traceKm();
+  const minimumKm = type === 'IN_PASSENGER_VEHICLE' || type === 'DRIVING' ? 0.8 : 0.05;
+  if (distanceKm < minimumKm) return;
+
+  const durationMin = (end - start) / 60_000;
+  const avgSpeedKmh = Number((distanceKm * 60 / durationMin).toFixed(1));
+  const highwayPercent = avgSpeedKmh >= 58 ? 85 : avgSpeedKmh >= 45 ? 65 : avgSpeedKmh >= 35 ? 35 : 10;
+  const hasSamples = points.some((point) => point.time && !point.anchor);
+
+  return {
+    id: `tl-${start}`,
+    startTime,
+    endTime,
+    date: /[+-]\d{2}:?\d{2}$/.test(startTime) ? startTime.slice(0, 10) : localDateInputValue(new Date(start)),
+    distanceKm: Number(distanceKm.toFixed(3)),
+    durationMin: Number(durationMin.toFixed(3)),
+    movingMin: trace.sampledMin > 0 ? trace.movingMin : undefined,
+    stoppedMin: trace.sampledMin > 0 ? trace.stoppedMin : undefined,
+    sampledMin: hasSamples ? trace.sampledMin : undefined,
+    longGapMin: hasSamples ? trace.longGapMin : undefined,
+    avgSpeedKmh,
+    highwayPercent,
+    cityPercent: 100 - highwayPercent,
+    activityType: type,
+    points: reduceTrace(points),
+    startName,
+    endName,
+    source: 'google-timeline',
+    classificationMethod: 'speed-estimate',
+  };
 }
 
-/**
- * Parses iPhone Google Maps exported `location-history.json` (on-device semanticSegments
- * or legacy timelineObjects). Automatically imports MOTORCYCLING segments only,
- * ignoring car/bus/train/walk unless `includeAmbiguousDriving` is enabled in Settings.
- */
-export function parseGoogleTimelineJson(
-  jsonText: string,
-  includeAmbiguousDriving = false
-): TimelineRide[] {
+/** Supports on-device Timeline exports and older Takeout activity segments. */
+export function parseGoogleTimelineJson(jsonText: string, includeAmbiguousDriving = false): TimelineRide[] {
   const data = JSON.parse(jsonText);
-  const rides: TimelineRide[] = [];
+  const segments = Array.isArray(data) ? data : data?.semanticSegments;
+  const legacy = data?.timelineObjects;
+  if (!Array.isArray(segments) && !Array.isArray(legacy)) throw new Error('Unsupported Timeline format');
 
-  const allowedTypes = new Set(['MOTORCYCLING', 'MOTORCYCLE']);
+  const allowed = new Set(['MOTORCYCLING', 'MOTORCYCLE']);
   if (includeAmbiguousDriving) {
-    allowedTypes.add('IN_PASSENGER_VEHICLE');
+    allowed.add('IN_PASSENGER_VEHICLE');
+    allowed.add('DRIVING');
   }
+  const rides = new Map<number, TimelineRide>();
+  const add = (input: RideInput) => {
+    const ride = buildRide(input);
+    if (ride) rides.set(timestamp(ride.startTime), ride);
+  };
 
-  // Format 1: Newer iPhone / Android On-Device Export (`semanticSegments` or root array)
-  const segments = Array.isArray(data)
-    ? data
-    : Array.isArray(data.semanticSegments)
-    ? data.semanticSegments
-    : [];
+  if (Array.isArray(segments)) {
+    const standalone = segments.flatMap((segment) => segment?.activity ? []
+      : pathPoints(segment?.timelinePath, timestamp(segment?.startTime)))
+      .sort((a, b) => a.ms - b.ms);
+    for (const segment of segments) {
+      const activity = segment?.activity;
+      const type = activityType(activity?.topCandidate?.type || activity?.activityType);
+      if (!activity || !allowed.has(type)) continue;
+      const { startTime, endTime } = segment;
+      const start = timestamp(startTime);
+      const end = timestamp(endTime);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
 
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    const activity = seg.activity;
-    if (!activity) continue;
-
-    const type = String(
-      activity.topCandidate?.type || activity.activityType || ''
-    ).toUpperCase();
-
-    if (!allowedTypes.has(type)) continue;
-
-    const startTime = seg.startTime;
-    const endTime = seg.endTime;
-    if (!startTime || !endTime) continue;
-
-    const points: RoutePoint[] = [];
-    if (activity.start?.latLng) {
-      const p = parseLatLngString(activity.start.latLng);
-      if (p) points.push(p);
-    }
-
-    if (Array.isArray(seg.timelinePath)) {
-      for (const tp of seg.timelinePath) {
-        if (tp.point) {
-          const p = parseLatLngString(tp.point);
-          if (p) {
-            const time = tp.time ||
-              (typeof tp.durationMinutesOffsetFromStartTime === 'number'
-                ? new Date(new Date(startTime).getTime() + tp.durationMinutesOffsetFromStartTime * 60000).toISOString()
-                : undefined);
-            points.push({ ...p, time });
-          }
-        }
+      const samples = [
+        ...standalone.slice(lowerBound(standalone, start), lowerBound(standalone, end + 1)),
+        ...pathPoints(segment.timelinePath, start).filter((point) => point.ms >= start && point.ms <= end),
+      ].sort((a, b) => a.ms - b.ms);
+      // Conflicting coordinates at the same minute cannot describe instantaneous movement.
+      const points = samples.filter((sample, index) => index === 0 || samples[index - 1].ms !== sample.ms)
+        .map((sample) => sample.point);
+      const origin = parseLocation(activity.start?.latLng ?? activity.start);
+      const destination = parseLocation(activity.end?.latLng ?? activity.end);
+      if (origin && !points.some((point) => timestamp(point.time) === start)) {
+        points.unshift({ ...origin, time: startTime, anchor: true });
       }
-    }
-
-    if (activity.end?.latLng) {
-      const p = parseLatLngString(activity.end.latLng);
-      if (p) points.push(p);
-    }
-
-    let distanceKm =
-      typeof activity.distanceMeters === 'number'
-        ? activity.distanceMeters / 1000
-        : 0;
-
-    if (distanceKm === 0 && points.length >= 2) {
-      for (let j = 1; j < points.length; j++) {
-        distanceKm += haversineKm(points[j - 1], points[j]);
+      if (destination && !points.some((point) => timestamp(point.time) === end)) {
+        points.push({ ...destination, time: endTime, anchor: true });
       }
-    }
-
-    if (distanceKm < 0.8) continue; // Ignore tiny GPS jitter
-
-    const durationMin = Math.max(
-      1,
-      Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000)
-    );
-    const avgSpeedKmh = Number(((distanceKm / durationMin) * 60).toFixed(1));
-    const { movingMin, stoppedMin } = annotateMotion(points, durationMin);
-    const { highwayPercent, cityPercent } = classifyRoadSplit(
-      distanceKm,
-      durationMin,
-      avgSpeedKmh
-    );
-
-    rides.push({
-      id: `tl-${new Date(startTime).getTime()}-${i}`,
-      startTime,
-      endTime,
-      date: startTime.slice(0, 10),
-      distanceKm: Number(distanceKm.toFixed(1)),
-      durationMin,
-      movingMin,
-      stoppedMin,
-      avgSpeedKmh,
-      highwayPercent,
-      cityPercent,
-      activityType: type,
-      points: downsamplePoints(points),
-      startName: activity.start?.name || activity.start?.address,
-      endName: activity.end?.name || activity.end?.address,
-      source: 'google-timeline',
-      classificationMethod: 'speed-estimate',
-    });
-  }
-
-  // Format 2: Legacy Semantic Location History (`timelineObjects`)
-  if (Array.isArray(data.timelineObjects)) {
-    for (let i = 0; i < data.timelineObjects.length; i++) {
-      const seg = data.timelineObjects[i]?.activitySegment;
-      if (!seg) continue;
-
-      const type = String(seg.activityType || '').toUpperCase();
-      if (!allowedTypes.has(type)) continue;
-
-      const startTime = seg.duration?.startTimestamp;
-      const endTime = seg.duration?.endTimestamp;
-      if (!startTime || !endTime) continue;
-
-      const points: RoutePoint[] = [];
-      if (seg.startLocation?.latitudeE7) {
-        points.push({
-          lat: seg.startLocation.latitudeE7 / 1e7,
-          lng: seg.startLocation.longitudeE7 / 1e7,
-        });
-      }
-      if (Array.isArray(seg.waypointPath?.waypoints)) {
-        for (const wp of seg.waypointPath.waypoints) {
-          if (wp.latE7) {
-            points.push({ lat: wp.latE7 / 1e7, lng: wp.lngE7 / 1e7 });
-          }
-        }
-      }
-      if (seg.endLocation?.latitudeE7) {
-        points.push({
-          lat: seg.endLocation.latitudeE7 / 1e7,
-          lng: seg.endLocation.longitudeE7 / 1e7,
-        });
-      }
-
-      const distanceKm = (seg.distance || 0) / 1000;
-      if (distanceKm < 0.8) continue;
-
-      const durationMin = Math.max(
-        1,
-        Math.round((new Date(endTime).getTime() - new Date(startTime).getTime()) / 60000)
-      );
-      const avgSpeedKmh = Number(((distanceKm / durationMin) * 60).toFixed(1));
-      const { movingMin, stoppedMin } = annotateMotion(points, durationMin);
-      const { highwayPercent, cityPercent } = classifyRoadSplit(
-        distanceKm,
-        durationMin,
-        avgSpeedKmh
-      );
-
-      rides.push({
-        id: `tl-leg-${new Date(startTime).getTime()}-${i}`,
-        startTime,
-        endTime,
-        date: startTime.slice(0, 10),
-        distanceKm: Number(distanceKm.toFixed(1)),
-        durationMin,
-        movingMin,
-        stoppedMin,
-        avgSpeedKmh,
-        highwayPercent,
-        cityPercent,
-        activityType: type,
-        points: downsamplePoints(points),
-        startName: seg.startLocation?.name || seg.startLocation?.address,
-        endName: seg.endLocation?.name || seg.endLocation?.address,
-        source: 'google-timeline',
-        classificationMethod: 'speed-estimate',
+      add({
+        type, startTime, endTime, points,
+        distanceMeters: numeric(activity.distanceMeters),
+        startName: textValue(activity.start?.name) ?? textValue(activity.start?.address),
+        endName: textValue(activity.end?.name) ?? textValue(activity.end?.address),
       });
     }
   }
 
-  return rides.sort((a, b) => b.startTime.localeCompare(a.startTime));
+  if (Array.isArray(legacy)) {
+    for (const item of legacy) {
+      const segment = item?.activitySegment;
+      const type = activityType(segment?.activityType);
+      if (!segment || !allowed.has(type)) continue;
+      const legacyLocation = (point: { latitudeE7?: number; longitudeE7?: number } | undefined) =>
+        coordinates((point?.latitudeE7 ?? NaN) / 1e7, (point?.longitudeE7 ?? NaN) / 1e7);
+      const waypoints: Array<{ latE7?: number; lngE7?: number } | null> =
+        Array.isArray(segment.waypointPath?.waypoints) ? segment.waypointPath.waypoints : [];
+      add({
+        type,
+        startTime: segment.duration?.startTimestamp,
+        endTime: segment.duration?.endTimestamp,
+        distanceMeters: numeric(segment.distance),
+        points: [
+          legacyLocation(segment.startLocation),
+          ...waypoints.map((point) => coordinates((point?.latE7 ?? NaN) / 1e7, (point?.lngE7 ?? NaN) / 1e7)),
+          legacyLocation(segment.endLocation),
+        ].filter((point): point is RoutePoint => Boolean(point)),
+        startName: textValue(segment.startLocation?.name) ?? textValue(segment.startLocation?.address),
+        endName: textValue(segment.endLocation?.name) ?? textValue(segment.endLocation?.address),
+      });
+    }
+  }
+
+  return [...rides.values()].sort((a, b) => timestamp(b.startTime) - timestamp(a.startTime));
 }

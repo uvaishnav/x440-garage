@@ -176,7 +176,7 @@ export const HomePage: React.FC<HomePageProps> = ({
 
       {timelineRides.length > 0 && (
         <button onClick={() => onNavigate('trips')} className="w-full rounded-xl bg-[#141518] border border-white/[0.08] px-4 py-3 flex items-center justify-between text-left">
-          <span><span className="block text-xs font-semibold text-[#F5F5F7]">Mapped riding history</span><span className="block text-[11px] text-[#8E8E93] mt-0.5">{timelineRides.length} rides imported</span></span>
+          <span><span className="block text-xs font-semibold text-[#F5F5F7]">Riding history</span><span className="block text-[11px] text-[#8E8E93] mt-0.5">{timelineRides.length} recorded ride {timelineRides.length === 1 ? 'leg' : 'legs'}</span></span>
           <span className="text-sm font-semibold text-[#FF6600] tabular-nums">{Math.round(mappedDistance).toLocaleString('en-IN')} km</span>
         </button>
       )}

@@ -200,6 +200,8 @@ export interface RoutePoint {
   lng: number;
   time?: string;
   speedKmh?: number;
+  /** Google activity endpoint, rather than a timed GPS sample. */
+  anchor?: true;
 }
 
 export interface TimelineRide {
@@ -211,6 +213,10 @@ export interface TimelineRide {
   durationMin: number;
   movingMin?: number;
   stoppedMin?: number;
+  /** Minutes covered by consecutive, usable GPS samples. */
+  sampledMin?: number;
+  /** Minutes within an activity's boundaries with no nearby GPS samples. */
+  longGapMin?: number;
   avgSpeedKmh: number;
   highwayPercent: number;
   cityPercent: number;

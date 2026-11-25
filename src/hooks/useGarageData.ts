@@ -514,14 +514,11 @@ export function useGarageData(user: User | null) {
 
   const saveTimelineRides = async (rides: TimelineRide[]) => {
     if (isCloud && db && user) {
-      // Firestore batch limit is 500; chunk safely
-      const chunks: TimelineRide[][] = [];
-      for (let i = 0; i < rides.length; i += 400) {
-        chunks.push(rides.slice(i, i + 400));
-      }
-      for (const chunk of chunks) {
+      // Write oldest first so a partial import can resume at its latest saved day.
+      const ordered = [...rides].sort((a, b) => Date.parse(a.startTime) - Date.parse(b.startTime));
+      for (let i = 0; i < ordered.length; i += 400) {
         const batch = writeBatch(db);
-        for (const r of chunk) {
+        for (const r of ordered.slice(i, i + 400)) {
           batch.set(doc(db, 'users', user.uid, 'timelineRides', r.id), withoutUndefined(r));
         }
         await batch.commit();

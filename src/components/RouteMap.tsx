@@ -4,24 +4,19 @@ import 'leaflet/dist/leaflet.css';
 import { RoutePoint } from '../types';
 
 interface RouteMapProps {
-  points: RoutePoint[];
+  routes: RoutePoint[][];
   heightClass?: string;
 }
 
 export const RouteMap: React.FC<RouteMapProps> = ({
-  points,
+  routes,
   heightClass = 'h-44',
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<L.Map | null>(null);
+  const pointCount = routes.reduce((count, route) => count + route.length, 0);
 
   useEffect(() => {
-    if (!containerRef.current || points.length < 2) return;
-
-    if (mapRef.current) {
-      mapRef.current.remove();
-      mapRef.current = null;
-    }
+    if (!containerRef.current || pointCount < 2) return;
 
     const map = L.map(containerRef.current, {
       zoomControl: false,
@@ -38,8 +33,9 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       maxZoom: 18,
     }).addTo(map);
 
-    const latLngs: L.LatLngExpression[] = points.map((p) => [p.lat, p.lng]);
-    const polyline = L.polyline(latLngs, {
+    const tracks = routes.map((route): L.LatLngExpression[] => route.map((p) => [p.lat, p.lng]));
+    const latLngs = tracks.flat();
+    L.polyline(tracks, {
       color: '#FF6600',
       weight: 3.5,
       opacity: 0.92,
@@ -47,7 +43,10 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       lineJoin: 'round',
     }).addTo(map);
 
-    // Start (Green) & End (Harley Orange) pins
+    // Isolated samples remain visible when the GPS trace has a gap.
+    tracks.filter((track) => track.length === 1).forEach(([point]) => {
+      L.circleMarker(point, { radius: 3, color: '#FF6600', fillOpacity: 0.85 }).addTo(map);
+    });
     L.circleMarker(latLngs[0], {
       radius: 5,
       fillColor: '#30D158',
@@ -64,16 +63,14 @@ export const RouteMap: React.FC<RouteMapProps> = ({
       fillOpacity: 1,
     }).addTo(map);
 
-    map.fitBounds(polyline.getBounds(), { padding: [18, 18] });
-    mapRef.current = map;
+    map.fitBounds(L.latLngBounds(latLngs), { padding: [18, 18], maxZoom: 16 });
 
     return () => {
       map.remove();
-      mapRef.current = null;
     };
-  }, [points]);
+  }, [routes, pointCount]);
 
-  if (points.length < 2) {
+  if (pointCount < 2) {
     return (
       <div
         className={`${heightClass} w-full rounded-xl bg-[#0F1013] border border-white/[0.06] flex items-center justify-center text-xs text-[#636366]`}
