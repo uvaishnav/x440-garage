@@ -1,4 +1,4 @@
-import type { RoutePoint, TimelineRide } from '../types';
+import type { RoutePoint, TimelinePlace, TimelineRide } from '../types';
 import { localDateInputValue } from './date';
 import { analyzeRouteSamples, routeDistanceKm, splitRouteTrace } from './routeTrace';
 
@@ -80,6 +80,31 @@ interface RideInput {
   points: RoutePoint[];
   startName?: string;
   endName?: string;
+  startPlace?: TimelinePlace;
+  endPlace?: TimelinePlace;
+}
+
+interface Visit {
+  place: TimelinePlace;
+  from: number;
+  to: number;
+}
+
+function matchVisit(point: RoutePoint | undefined, at: number, visits: Visit[]): TimelinePlace | undefined {
+  if (!point) return;
+  let closest: TimelinePlace | undefined;
+  let bestScore = Infinity;
+  for (const { place, from, to } of visits) {
+    const minutes = Math.max(from - at, at - to, 0) / 60_000;
+    if (minutes > 15) continue;
+    const km = routeDistanceKm(point, place);
+    const score = km + minutes * 0.025;
+    if (km <= 0.45 && score < bestScore) {
+      closest = place;
+      bestScore = score;
+    }
+  }
+  return closest;
 }
 
 function buildRide(input: RideInput): TimelineRide | undefined {
@@ -120,6 +145,8 @@ function buildRide(input: RideInput): TimelineRide | undefined {
     points: reduceTrace(points),
     startName,
     endName,
+    startPlace: input.startPlace,
+    endPlace: input.endPlace,
     source: 'google-timeline',
     classificationMethod: 'speed-estimate',
   };
@@ -147,6 +174,15 @@ export function parseGoogleTimelineJson(jsonText: string, includeAmbiguousDrivin
     const standalone = segments.flatMap((segment) => segment?.activity ? []
       : pathPoints(segment?.timelinePath, timestamp(segment?.startTime)))
       .sort((a, b) => a.ms - b.ms);
+    const visits = segments.flatMap((segment): Visit[] => {
+      const candidate = segment?.visit?.topCandidate;
+      const id = textValue(candidate?.placeID ?? candidate?.placeId);
+      const point = parseLocation(candidate?.placeLocation?.latLng ?? candidate?.placeLocation);
+      const from = timestamp(segment?.startTime);
+      const to = timestamp(segment?.endTime);
+      if (!id || !/^[A-Za-z0-9_-]{15,200}$/.test(id) || !point || !Number.isFinite(from) || to < from || !Number.isFinite(to)) return [];
+      return [{ place: { id, lat: point.lat, lng: point.lng }, from, to }];
+    });
     for (const segment of segments) {
       const activity = segment?.activity;
       const type = activityType(activity?.topCandidate?.type || activity?.activityType);
@@ -176,6 +212,8 @@ export function parseGoogleTimelineJson(jsonText: string, includeAmbiguousDrivin
         distanceMeters: numeric(activity.distanceMeters),
         startName: textValue(activity.start?.name) ?? textValue(activity.start?.address),
         endName: textValue(activity.end?.name) ?? textValue(activity.end?.address),
+        startPlace: matchVisit(origin ?? points[0], start, visits),
+        endPlace: matchVisit(destination ?? points[points.length - 1], end, visits),
       });
     }
   }

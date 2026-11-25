@@ -12,7 +12,7 @@ import { buildPreRideChecklist } from '../lib/calculations';
 import { localDateInputValue, localDateTimeValue } from '../lib/date';
 import { parseGoogleTimelineJson } from '../lib/timelineParser';
 import { parseGpx } from '../lib/gpxParser';
-import { buildRideHistory, newTimelineRides } from '../lib/rideHistory';
+import { buildRideHistory, newTimelineRides, timelinePlaceUpdates } from '../lib/rideHistory';
 import { AppSettings, FuelLog, MaintenanceTask, TimelineRide, Trip } from '../types';
 
 interface TripsPageProps {
@@ -25,6 +25,7 @@ interface TripsPageProps {
   onSaveTrip: (trip: Trip) => Promise<void>;
   onDeleteTrip: (id: string) => Promise<void>;
   onImportTimeline: (rides: TimelineRide[]) => Promise<void>;
+  onSavePlaceName: (id: string, name: string) => Promise<void>;
   onDeleteTimelineRide: (id: string) => Promise<void>;
 }
 
@@ -38,6 +39,7 @@ export const TripsPage: React.FC<TripsPageProps> = ({
   onSaveTrip,
   onDeleteTrip,
   onImportTimeline,
+  onSavePlaceName,
   onDeleteTimelineRide,
 }) => {
   const [showTripEditor, setShowTripEditor] = useState(false);
@@ -214,14 +216,18 @@ export const TripsPage: React.FC<TripsPageProps> = ({
         return;
       }
       const incoming = newTimelineRides(parsed, timelineRides);
-      if (!incoming.length) {
+      const updates = gpx ? [] : timelinePlaceUpdates(parsed, timelineRides);
+      if (!incoming.length && !updates.length) {
         setImportStatus('You’re up to date. This file has no new ride legs.');
         return;
       }
       saving = true;
-      setImportStatus(`Saving ${incoming.length} ride ${incoming.length === 1 ? 'leg' : 'legs'}…`);
-      await onImportTimeline(incoming);
-      setImportStatus(`Added ${incoming.length} ride ${incoming.length === 1 ? 'leg' : 'legs'}.`);
+      setImportStatus('Saving ride history…');
+      await onImportTimeline([...incoming, ...updates]);
+      setImportStatus([
+        incoming.length > 0 && `Added ${incoming.length} ride ${incoming.length === 1 ? 'leg' : 'legs'}.`,
+        updates.length > 0 && `Matched stops for ${updates.length} saved ${updates.length === 1 ? 'leg' : 'legs'}.`,
+      ].filter(Boolean).join(' '));
     } catch {
       setImportStatus(saving ? 'Could not finish saving. Import the same file again to retry.'
         : gpx ? 'Could not read this GPX file.' : 'Could not read this file as a Google Maps Timeline export.');
@@ -291,7 +297,8 @@ export const TripsPage: React.FC<TripsPageProps> = ({
               </button>
             ))}
           </div>
-          <RideTripSummary rides={byTrip.get(activeTrip.id) ?? []} manual />
+          <RideTripSummary rides={byTrip.get(activeTrip.id) ?? []} names={settings.timelinePlaceNames}
+            onSavePlaceName={onSavePlaceName} manual />
         </section>
       )}
 
@@ -309,7 +316,8 @@ export const TripsPage: React.FC<TripsPageProps> = ({
         </div>
       </section>
 
-      {timelineRides.length > 0 && <RidingStats rides={timelineRides} onDelete={onDeleteTimelineRide} />}
+      {timelineRides.length > 0 && <RidingStats rides={timelineRides}
+        names={settings.timelinePlaceNames} onDelete={onDeleteTimelineRide} />}
 
       {pastTrips.length > 0 && (
         <section className="space-y-2.5">
@@ -329,7 +337,8 @@ export const TripsPage: React.FC<TripsPageProps> = ({
                   <TripMetric label="Cost / km" value={stats.costPerKm ? `₹${stats.costPerKm.toFixed(2)}` : '—'} />
                 </div>
                 {trip.notes && <p className="text-xs text-[#8E8E93]">{trip.notes}</p>}
-                <RideTripSummary rides={byTrip.get(trip.id) ?? []} manual />
+                <RideTripSummary rides={byTrip.get(trip.id) ?? []} names={settings.timelinePlaceNames}
+                  onSavePlaceName={onSavePlaceName} manual />
               </div>
             );
           })}
@@ -343,13 +352,21 @@ export const TripsPage: React.FC<TripsPageProps> = ({
             <p className="mt-0.5 text-xs text-[#B3B3BB]">Trips with more than an hour of recorded ride time.</p>
           </div>
           {timelineTrips.slice(0, visibleTrips).map(({ rides, roundTrip }) => (
-            <TimelineTripCard key={rides[0].id} rides={rides} roundTrip={roundTrip} />
+            <TimelineTripCard key={rides[0].id} rides={rides} roundTrip={roundTrip}
+              names={settings.timelinePlaceNames} onSavePlaceName={onSavePlaceName} />
           ))}
-          {timelineTrips.length === 0 && <p className="px-1 text-sm text-[#B3B3BB]">No long rides found outside your manual trips. Short rides appear in Riding stats.</p>}
+          {timelineTrips.length === 0 && <p className="px-1 text-sm text-[#B3B3BB]">No long rides found outside your manual trips. Short rides appear in Riding activity.</p>}
           {visibleTrips < timelineTrips.length && (
             <button type="button" className="min-h-11 w-full rounded-xl bg-[#1F2126] text-sm font-medium text-[#FFBE90] hover:bg-[#282A30]" onClick={() => setVisibleTrips((count) => count + 6)}>Show more long rides</button>
           )}
         </section>
+      )}
+      {timelineRides.length > 0 && (
+        <p className="px-1 text-xs text-[#B3B3BB]">
+          Approximate area names from <a className="underline underline-offset-4" href="https://www.geonames.org/"
+            target="_blank" rel="noreferrer">GeoNames</a> (<a className="underline underline-offset-4"
+            href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>).
+        </p>
       )}
 
       {showTripEditor && (

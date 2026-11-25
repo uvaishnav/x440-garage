@@ -25,6 +25,20 @@ export function newTimelineRides(incoming: TimelineRide[], saved: TimelineRide[]
   });
 }
 
+/** An overlapping export can add visit metadata to saved legs without adding those legs again. */
+export function timelinePlaceUpdates(incoming: TimelineRide[], saved: TimelineRide[]): TimelineRide[] {
+  const byKey = new Map(incoming.filter(isGoogleRide).map((ride) => [importKey(ride), ride]));
+  return saved.flatMap((ride) => {
+    const parsed = byKey.get(importKey(ride));
+    if (!parsed || Date.parse(parsed.endTime) !== Date.parse(ride.endTime)) return [];
+    const startPlace = ride.startPlace ?? parsed.startPlace;
+    const endPlace = ride.endPlace ?? parsed.endPlace;
+    return startPlace !== ride.startPlace || endPlace !== ride.endPlace
+      ? [{ ...ride, startPlace, endPlace }]
+      : [];
+  });
+}
+
 /** GPS outages are unknown time. Breaks between legs are outside this total. */
 export function recordedLegMinutes(ride: TimelineRide): number {
   return Math.max(0, ride.durationMin - (ride.longGapMin ?? 0));

@@ -666,6 +666,20 @@ export function useGarageData(user: User | null) {
     }
   };
 
+  const saveTimelinePlaceName = async (id: string, name: string) => {
+    const label = name.trim().slice(0, 80) || null;
+    if (isCloud && db && user) {
+      await setDoc(doc(db, 'users', user.uid, 'meta', 'settings'), {
+        timelinePlaceNames: { [id]: label },
+      }, { merge: true });
+    } else {
+      setSettings((previous) => ({
+        ...previous,
+        timelinePlaceNames: { ...previous.timelinePlaceNames, [id]: label },
+      }));
+    }
+  };
+
   const importBackup = async (backup: GarageBackup) => {
     if (isCloud && db && user) {
       const writes: Array<{ collectionName: string; id: string; value: unknown }> = [];
@@ -753,6 +767,7 @@ export function useGarageData(user: User | null) {
     resolveIssue,
     deleteIssue,
     saveTimelineRides,
+    saveTimelinePlaceName,
     deleteTimelineRide,
     saveBikeEvent,
     deleteBikeEvent,

@@ -204,6 +204,12 @@ export interface RoutePoint {
   anchor?: true;
 }
 
+export interface TimelinePlace {
+  id: string;
+  lat: number;
+  lng: number;
+}
+
 export interface TimelineRide {
   id: string;
   startTime: string; // ISO
@@ -224,6 +230,8 @@ export interface TimelineRide {
   points: RoutePoint[];
   startName?: string;
   endName?: string;
+  startPlace?: TimelinePlace;
+  endPlace?: TimelinePlace;
   source?: 'google-timeline' | 'gpx';
   classificationMethod?: 'osm' | 'speed-estimate';
   tripId?: string | null;
@@ -250,6 +258,7 @@ export interface AppSettings {
   insuranceExpiry: string; // YYYY-MM-DD
   pucExpiry: string; // YYYY-MM-DD
   includeAmbiguousDriving: boolean;
+  timelinePlaceNames?: Record<string, string | null>;
   nextServiceOdometer?: number;
   documentReminderDays?: number;
   maintenanceTemplateVersion?: number;

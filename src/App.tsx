@@ -129,6 +129,7 @@ export default function App() {
             onSaveTrip={garage.saveTrip}
             onDeleteTrip={garage.deleteTrip}
             onImportTimeline={garage.saveTimelineRides}
+            onSavePlaceName={garage.saveTimelinePlaceName}
             onDeleteTimelineRide={garage.deleteTimelineRide}
           />
         )}
